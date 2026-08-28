@@ -58,7 +58,7 @@ templates:
       extra: ""
     overlay:
       style: center
-      scrim: box
+      scrim: none
       color: "#FFFFFF"
       size: 58
     audio:
