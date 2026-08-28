@@ -1,0 +1,84 @@
+# Templated variation. One template is chosen per video (weighted random, seeded).
+# Each controls color grade, transitions, motion, overlay styling, and audio pairing.
+#
+# color.eq       -> ffmpeg `eq` filter args   (contrast/brightness/saturation/gamma)
+# color.extra    -> any extra ffmpeg filter(s) appended after eq (optional)
+# transition     -> none | fade
+# motion         -> none | zoom_in           (zoom_in is slow, ~2x render time)
+# overlay.style  -> lower_third | center
+# overlay.scrim  -> none | gradient | box
+# audio.stems    -> how many audio beds to mix together
+# audio.tags     -> prefer audio files whose manifest tags intersect this list
+
+templates:
+  - name: warm-dawn
+    weight: 3
+    clip_count: [2, 3]
+    transition: fade
+    transition_duration: 1.0
+    motion: none
+    color:
+      eq: "contrast=1.03:brightness=0.01:saturation=1.07:gamma=0.98"
+      extra: "colorbalance=rs=0.04:gs=0.01:bs=-0.04"
+    overlay:
+      style: lower_third
+      scrim: gradient
+      color: "#FDFDF8"
+      size: 62
+    audio:
+      stems: 2
+      tags: [rain, lofi]
+
+  - name: cool-tide
+    weight: 3
+    clip_count: [2, 3]
+    transition: fade
+    transition_duration: 1.2
+    motion: none
+    color:
+      eq: "contrast=1.04:brightness=-0.01:saturation=1.02:gamma=1.0"
+      extra: "colorbalance=rs=-0.03:bs=0.05"
+    overlay:
+      style: lower_third
+      scrim: gradient
+      color: "#F4FAFF"
+      size: 62
+    audio:
+      stems: 1
+      tags: [ocean, waves]
+
+  - name: still-forest
+    weight: 2
+    clip_count: [1, 2]
+    transition: none
+    transition_duration: 0.0
+    motion: zoom_in
+    color:
+      eq: "contrast=1.02:brightness=0.0:saturation=1.05:gamma=0.97"
+      extra: ""
+    overlay:
+      style: center
+      scrim: box
+      color: "#FFFFFF"
+      size: 58
+    audio:
+      stems: 2
+      tags: [forest, birds, lofi]
+
+  - name: night-calm
+    weight: 2
+    clip_count: [2, 3]
+    transition: fade
+    transition_duration: 1.5
+    motion: none
+    color:
+      eq: "contrast=1.05:brightness=-0.03:saturation=0.98:gamma=1.02"
+      extra: "colorbalance=rs=-0.05:gs=-0.02:bs=0.06"
+    overlay:
+      style: center
+      scrim: gradient
+      color: "#EAF0FF"
+      size: 60
+    audio:
+      stems: 2
+      tags: [rain, binaural, ambient]

@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Secrets
+.env
+secrets/
+*.token.json
+client_secret*.json
+
+# Generated media & bookkeeping
+assets/video/*
+assets/audio/*
+assets/fonts/*
+!assets/**/.gitkeep
+output/*
+!output/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# Local asset provenance (you maintain this; keep it out of git if it has private URLs)
+assets/manifest.yaml

@@ -1,0 +1,77 @@
+# Global configuration for social-peace.
+# Paths are resolved relative to the repo root.
+
+project:
+  # Platforms the `run` command will attempt to publish to.
+  # Only "youtube" is wired up so far; tiktok / instagram come later.
+  target_platforms: [youtube]
+  timezone: "America/Los_Angeles"
+
+render:
+  resolution: [1080, 1920]        # 9:16
+  fps: 30
+  duration_seconds: [35, 55]      # a random length in this range is chosen per video
+  audio_fade_in: 2.0
+  audio_fade_out: 3.0
+  loudness_lufs: -14.0            # integrated loudness target (typical for social)
+  crf: 19                         # libx264 quality (lower = better/bigger)
+  preset: medium
+  keep_overlay_png: false         # keep the generated text PNG next to the mp4 for debugging
+
+paths:
+  video_assets: assets/video
+  audio_assets: assets/audio
+  fonts: assets/fonts
+  output: output
+  logs: logs
+
+# Optional. If assets/manifest.yaml exists it is used for tag-based selection and
+# license tracking. Files not listed there are still usable (matched by filename).
+assets_manifest: assets/manifest.yaml
+
+# Overlay copy. One line is chosen at random per video (seeded, so reproducible).
+overlay_text:
+  - "Take 60 seconds. Breathe."
+  - "Unclench your jaw. Drop your shoulders."
+  - "Look away from the screen for a moment."
+  - "Inhale for 4. Hold for 4. Exhale for 6."
+  - "Nothing to scroll here. Just rest."
+  - "You are allowed to do nothing right now."
+
+# Optional small second line (handle / watermark). Set to "" to disable.
+overlay_footer: ""
+
+metadata:
+  youtube:
+    title_templates:
+      - "{hook} 🌿 #shorts"
+      - "A 60-second reset 🌊 #shorts"
+      - "{hook} #shorts #calm"
+    description: |
+      A short calming break — original ambient nature footage and sound.
+      No doom-scrolling here. Follow for a daily reset.
+    tags: [calm, relax, nature, ambient, mindfulness, breathe, shorts, lofi]
+    category_id: "22"          # People & Blogs
+    privacy: private           # start private; flip to "public" once your app/channel is verified
+    made_for_kids: false
+  hashtags:
+    - "#calm"
+    - "#relax"
+    - "#nature"
+    - "#breathe"
+    - "#mindfulness"
+    - "#shorts"
+
+fetch:
+  pixabay:
+    # API key via PIXABAY_API_KEY in .env
+    default_query: "nature calm slow"
+    per_page: 20
+    min_width: 1080
+    video_type: film
+  pexels:
+    # API key via PEXELS_API_KEY in .env
+    default_query: "calm nature vertical"
+    orientation: portrait
+    size: large
+    per_page: 15

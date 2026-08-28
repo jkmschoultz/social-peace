@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "social-peace"
+version = "0.1.0"
+description = "Automated assembly and scheduled posting of calming short-form video (original/licensed content only)."
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML>=6.0",
+    "Pillow>=10.2",
+    "requests>=2.31",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+youtube = [
+    "google-api-python-client>=2.100",
+    "google-auth-oauthlib>=1.2",
+    "google-auth-httplib2>=0.2",
+]
+
+[project.scripts]
+social-peace = "social_peace.cli:main"
+
+[tool.setuptools]
+packages = ["social_peace", "social_peace.pipeline", "social_peace.fetch", "social_peace.publish"]

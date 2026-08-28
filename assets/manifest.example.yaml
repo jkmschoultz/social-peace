@@ -1,0 +1,32 @@
+# Copy to assets/manifest.yaml and edit. Gitignored by default.
+# Keys are filenames inside assets/video and assets/audio.
+# `tags` feed template-based selection; the rest is your licensing paper trail.
+
+video:
+  dawn-field-01.mp4:
+    tags: [field, grass, warm, dawn, slow]
+    source: "Pexels — photographer name"
+    license: "Pexels License"
+    url: "https://www.pexels.com/video/000000/"
+  forest-canopy-01.mp4:
+    tags: [forest, trees, green, birds]
+    source: "Pixabay — uploader name"
+    license: "Pixabay Content License"
+    url: "https://pixabay.com/videos/id-000000/"
+
+audio:
+  rain-soft-01.mp3:
+    tags: [rain, ambient]
+    source: "Pixabay — uploader name"
+    license: "Pixabay Content License"
+    url: "https://pixabay.com/music/id-000000/"
+  ocean-waves-01.mp3:
+    tags: [ocean, waves, ambient]
+    source: "Pixabay — uploader name"
+    license: "Pixabay Content License"
+    url: "https://pixabay.com/sound-effects/id-000000/"
+  lofi-loop-01.mp3:
+    tags: [lofi, music]
+    source: "Pixabay — uploader name"
+    license: "Pixabay Content License"
+    url: "https://pixabay.com/music/id-000000/"

@@ -1,0 +1,52 @@
+from __future__ import annotations
+
+import logging
+import re
+from pathlib import Path
+
+import requests
+import yaml
+
+from social_peace.fetch import INCOMING_SUBDIR
+
+log = logging.getLogger(__name__)
+
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def slugify(text: str, maxlen: int = 40) -> str:
+    s = _SLUG_RE.sub("-", text.lower()).strip("-")
+    return s[:maxlen] or "clip"
+
+
+def incoming_dir(video_assets: Path) -> Path:
+    d = video_assets / INCOMING_SUBDIR
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def download(url: str, dest: Path, *, timeout: int = 60) -> bool:
+    if dest.exists():
+        log.info("exists, skipping: %s", dest.name)
+        return False
+    log.info("downloading %s -> %s", url[:80], dest.name)
+    with requests.get(url, stream=True, timeout=timeout) as r:
+        r.raise_for_status()
+        tmp = dest.with_suffix(dest.suffix + ".part")
+        with tmp.open("wb") as fh:
+            for chunk in r.iter_content(chunk_size=1 << 16):
+                fh.write(chunk)
+        tmp.rename(dest)
+    return True
+
+
+def append_manifest_stub(manifest_path: Path, kind: str, filename: str, entry: dict) -> None:
+    """Merge a provenance entry into assets/manifest.yaml (created if absent)."""
+    data = {}
+    if manifest_path.exists():
+        data = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+    data.setdefault(kind, {})
+    data[kind].setdefault(filename, entry)
+    manifest_path.write_text(
+        yaml.safe_dump(data, sort_keys=True, allow_unicode=True), encoding="utf-8"
+    )
