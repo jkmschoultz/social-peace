@@ -2,10 +2,33 @@
 # Paths are resolved relative to the repo root.
 
 project:
-  # Platforms the `run` command will attempt to publish to.
-  # Only "youtube" is wired up so far; tiktok / instagram come later.
+  # Platforms the `run` / `publish-approved` commands will attempt to publish to.
+  # Only "youtube" is wired up so far; tiktok / instagram are skipped stubs.
   target_platforms: [youtube]
   timezone: "America/Los_Angeles"
+
+# `social-peace pipeline`: scrape -> auto-promote -> render a batch for review.
+pipeline:
+  fetch_sources: [pexels, pixabay]   # stock video sources to rotate through
+  fetch_audio: true                  # also pull CC0 beds from Freesound (needs FREESOUND_API_KEY)
+  fetch_per_run: 6                    # items to request per source per run
+  min_clip_pool: 8                   # skip fetching when assets/video already has this many clips
+  auto_promote: true                 # move _incoming/ up into the render pool automatically
+  batch_size: 4                      # videos rendered per pipeline run
+  queries:
+    video:
+      - "slow ocean waves"
+      - "forest light morning"
+      - "still mountain lake"
+      - "drifting clouds timelapse"
+      - "rain on green leaves"
+      - "calm river current"
+    audio:
+      - "ambient drone calm"
+      - "gentle rain loop"
+      - "forest birds ambience"
+      - "soft piano ambient"
+      - "ocean waves loop"
 
 render:
   resolution: [1080, 1920]        # 9:16
@@ -37,9 +60,26 @@ overlay_text:
   - "Inhale for 4. Hold for 4. Exhale for 6."
   - "Nothing to scroll here. Just rest."
   - "You are allowed to do nothing right now."
+  - "Let your shoulders fall."
+  - "This is your minute. Nothing else."
+  - "Soften your eyes. Slow your breath."
+  - "The scroll can wait."
+  - "Just watch. Just breathe."
+  - "No task here. Only rest."
 
 # Optional small second line (handle / watermark). Set to "" to disable.
 overlay_footer: ""
+
+# Platform captions (YouTube title/description, TikTok/Instagram caption) are
+# written fresh per video by Claude, in the style of the example lists under
+# `metadata:` below, instead of picking one of those lines verbatim. Needs
+# ANTHROPIC_API_KEY in .env; with it unset, disabled, or on any API error, the
+# old rng.choice-from-the-list behaviour is the fallback — nothing hard-fails.
+captions:
+  enabled: true
+  model: claude-opus-5
+  effort: low              # low | medium | high | xhigh | max
+  max_output_tokens: 700
 
 metadata:
   youtube:
@@ -47,6 +87,13 @@ metadata:
       - "{hook} 🌿 #shorts"
       - "A 60-second reset 🌊 #shorts"
       - "{hook} #shorts #calm"
+      - "One quiet minute 🌙 #shorts"
+      - "{hook} #shorts #calm #relax"
+      - "A still minute for a loud day 🌿 #shorts"
+      - "Press pause on everything 🌊 #shorts"
+      - "{hook} 🤍 #shorts #mindfulness"
+      - "60 seconds of nothing 🍃 #shorts"
+      - "{hook} 🌙 #shorts"
     description: |
       A short calming break — original ambient nature footage and sound.
       No doom-scrolling here. Follow for a daily reset.
@@ -61,6 +108,33 @@ metadata:
     - "#breathe"
     - "#mindfulness"
     - "#shorts"
+  # Per-platform captions. One template is chosen per video (seeded, reproducible);
+  # {hook} is the overlay line with trailing punctuation stripped. Editable in the
+  # review interface before approval.
+  tiktok:
+    caption_templates:
+      - "{hook} 🌿"
+      - "a minute of quiet 🌊"
+      - "{hook} — breathe with me"
+      - "one slow minute 🌙"
+      - "let this be your pause"
+      - "{hook} — stay a minute"
+      - "nothing to do here but breathe 🌊"
+      - "close your eyes after this one 🤍"
+      - "a small rest, right now 🍃"
+      - "{hook} 🌙"
+    hashtags: ["#calm", "#relax", "#nature", "#breathe", "#fyp"]
+    privacy: "SELF_ONLY"        # TikTok API value; start private, flip after review of the flow
+  instagram:
+    caption_templates:
+      - "{hook}\n\nfollow for a daily reset 🌿"
+      - "{hook}"
+      - "{hook}\n\nsave this for a hard day 🍃"
+      - "{hook}\n\none minute. that's all this asks."
+      - "A pause, in case no one told you to take one. 🌿"
+      - "{hook}\n\nbreathe with it 🌊"
+      - "Come back to this when the day gets loud. 🌙"
+      - "{hook}\n\nlet your shoulders drop 🤍"
 
 fetch:
   pixabay:
@@ -75,3 +149,8 @@ fetch:
     orientation: portrait
     size: large
     per_page: 15
+  freesound:
+    # API token via FREESOUND_API_KEY in .env (https://freesound.org/apiv2/apply/)
+    default_query: "ambient drone calm"
+    page_size: 15
+    min_duration: 20        # seconds; shorter sounds loop too obviously as a bed

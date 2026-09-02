@@ -12,6 +12,7 @@ dependencies = [
     "Pillow>=10.2",
     "requests>=2.31",
     "python-dotenv>=1.0",
+    "Flask>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -20,9 +21,21 @@ youtube = [
     "google-auth-oauthlib>=1.2",
     "google-auth-httplib2>=0.2",
 ]
+llm = [
+    "anthropic>=0.40",
+]
 
 [project.scripts]
 social-peace = "social_peace.cli:main"
 
 [tool.setuptools]
-packages = ["social_peace", "social_peace.pipeline", "social_peace.fetch", "social_peace.publish"]
+packages = [
+    "social_peace",
+    "social_peace.pipeline",
+    "social_peace.fetch",
+    "social_peace.publish",
+    "social_peace.review",
+]
+
+[tool.setuptools.package-data]
+"social_peace.review" = ["templates/*.html"]

@@ -4,11 +4,15 @@
   social-peace fetch   [--source pixabay|pexels] [--query "..."] [--limit N]
   social-peace publish  VIDEO.mp4 [--platform youtube]
   social-peace run     [--count N]        # build + publish to project.target_platforms
+  social-peace pipeline [--batch N] [--no-fetch] [--dry-run]   # scrape -> render a review batch
+  social-peace review  [--host H] [--port P]                   # web UI to approve/reject
+  social-peace publish-approved [--platform P] [--limit N]     # post the approved renders
   social-peace ledger  [--limit N]        # tail the posts.jsonl ledger
 """
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import random
 import sys
@@ -79,7 +83,11 @@ def cmd_fetch(args: argparse.Namespace) -> int:
 
 
 # ------------------------------------------------------------------------- publish
-_PUBLISHERS = {"youtube": "social_peace.publish.youtube"}
+_PUBLISHERS = {
+    "youtube": "social_peace.publish.youtube",
+    "tiktok": "social_peace.publish.tiktok",
+    "instagram": "social_peace.publish.instagram",
+}
 
 
 def _publish_one(cfg: Config, video_path: Path, platform: str) -> bool:
@@ -157,6 +165,85 @@ def cmd_run(args: argparse.Namespace) -> int:
     return rc
 
 
+# -------------------------------------------------------------------------- pipeline
+def cmd_pipeline(args: argparse.Namespace) -> int:
+    from social_peace.pipeline.auto import run_pipeline
+
+    cfg = _bootstrap()
+    summary = run_pipeline(
+        cfg,
+        batch=args.batch,
+        seed=args.seed,
+        do_fetch=not args.no_fetch,
+        dry_run=args.dry_run,
+    )
+    return 0 if summary["ok"] else 1
+
+
+# --------------------------------------------------------------------------- review
+def cmd_review(args: argparse.Namespace) -> int:
+    from social_peace.review.app import serve
+
+    cfg = _bootstrap()
+    serve(cfg, host=args.host, port=args.port)
+    return 0
+
+
+# ------------------------------------------------------------------ publish-approved
+def cmd_publish_approved(args: argparse.Namespace) -> int:
+    from social_peace import ledger
+    from social_peace.pipeline.metadata import mark_status
+
+    cfg = _bootstrap()
+    if args.platform:
+        platforms = [args.platform]
+    else:
+        platforms = list(cfg.raw.get("project", {}).get("target_platforms", []))
+    if not platforms:
+        log.error("no platforms (pass --platform or set project.target_platforms)")
+        return 1
+
+    out_dir = cfg.path("output")
+    approved = []
+    for side in sorted(out_dir.glob("*.json")):
+        try:
+            md = json.loads(side.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        if md.get("review", {}).get("state") == "approved":
+            approved.append(side)
+    if args.limit is not None:
+        approved = approved[: args.limit]
+    if not approved:
+        print("no approved videos awaiting publish")
+        return 0
+
+    rc = 0
+    for side in approved:
+        video_path = side.with_suffix(".mp4")
+        if not video_path.is_file():
+            log.error("mp4 missing for %s", side.stem)
+            rc = 1
+            continue
+        for platform in platforms:
+            if platform not in _PUBLISHERS:
+                log.info("%s: no publisher (stub) — skipping %s", platform, side.stem)
+                if not args.dry_run:
+                    mark_status(side, platform, "skipped")
+                continue
+            if ledger.already_published(cfg.path("logs"), video_path.stem, platform):
+                log.info("%s already on %s, skipping", video_path.name, platform)
+                continue
+            if args.dry_run:
+                print(f"would publish {video_path.name} -> {platform}")
+                continue
+            ok = _publish_one(cfg, video_path, platform)
+            mark_status(side, platform, "uploaded" if ok else "error")
+            if not ok:
+                rc = 1
+    return rc
+
+
 # -------------------------------------------------------------------------- ledger
 def cmd_ledger(args: argparse.Namespace) -> int:
     from social_peace import ledger
@@ -206,6 +293,25 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("run", help="build + publish to project.target_platforms (scheduler entrypoint)")
     r.add_argument("--count", type=int, default=1)
     r.set_defaults(func=cmd_run)
+
+    pl = sub.add_parser("pipeline", help="scrape + auto-promote + render a review batch")
+    pl.add_argument("--batch", type=int, default=None, help="videos to render (default pipeline.batch_size)")
+    pl.add_argument("--seed", type=int, default=None)
+    pl.add_argument("--no-fetch", action="store_true", help="skip scraping; render from the current pool")
+    pl.add_argument("--dry-run", action="store_true", help="run selection, render nothing")
+    pl.set_defaults(func=cmd_pipeline)
+
+    rv = sub.add_parser("review", help="local web UI to approve/reject renders")
+    rv.add_argument("--host", default="127.0.0.1")
+    rv.add_argument("--port", type=int, default=8756)
+    rv.set_defaults(func=cmd_review)
+
+    pa = sub.add_parser("publish-approved", help="publish every approved, not-yet-posted render")
+    pa.add_argument("--platform", default=None, choices=list(_PUBLISHERS),
+                    help="override project.target_platforms")
+    pa.add_argument("--limit", type=int, default=None, help="cap how many to publish this run")
+    pa.add_argument("--dry-run", action="store_true")
+    pa.set_defaults(func=cmd_publish_approved)
 
     lg = sub.add_parser("ledger", help="show recent ledger entries")
     lg.add_argument("--limit", type=int, default=20)

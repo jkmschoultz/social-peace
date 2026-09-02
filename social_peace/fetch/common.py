@@ -25,6 +25,35 @@ def incoming_dir(video_assets: Path) -> Path:
     return d
 
 
+def incoming_audio_dir(audio_assets: Path) -> Path:
+    d = audio_assets / INCOMING_SUBDIR
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def promote_incoming(asset_dir: Path) -> list[Path]:
+    """Move every file out of `asset_dir/_incoming/` up into `asset_dir`.
+
+    Manifest entries are keyed by bare filename, so they keep resolving after the
+    move. Name collisions in the destination are left in place and skipped.
+    """
+    src = asset_dir / INCOMING_SUBDIR
+    if not src.is_dir():
+        return []
+    moved: list[Path] = []
+    for f in sorted(src.iterdir()):
+        if not f.is_file() or f.name.endswith(".part"):
+            continue
+        dest = asset_dir / f.name
+        if dest.exists():
+            log.info("promote: %s already in %s, skipping", f.name, asset_dir.name)
+            continue
+        f.rename(dest)
+        log.info("promote: %s -> %s", f.name, asset_dir.name)
+        moved.append(dest)
+    return moved
+
+
 def download(url: str, dest: Path, *, timeout: int = 60) -> bool:
     if dest.exists():
         log.info("exists, skipping: %s", dest.name)

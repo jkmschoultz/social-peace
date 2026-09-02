@@ -84,3 +84,8 @@ class Config:
         """kind is 'video' or 'audio'. Returns manifest tags for a filename, or []."""
         entry = (self.manifest.get(kind) or {}).get(filename) or {}
         return list(entry.get("tags", []))
+
+    def source_for(self, kind: str, filename: str) -> str | None:
+        """kind is 'video' or 'audio'. Returns the manifest provenance URL, or None."""
+        entry = (self.manifest.get(kind) or {}).get(filename) or {}
+        return entry.get("url") or None

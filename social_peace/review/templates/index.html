@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>social-peace review</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f6f4; --card:#fff; --line:#e2e2dc; --ink:#1c1c1a; --muted:#6b6b63; --ok:#1f7a3d; --no:#a12b2b; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#15150f; --card:#20201a; --line:#33332a; --ink:#ececdf; --muted:#9a9a8c; --ok:#4bbf72; --no:#e06a6a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); padding:14px 20px; display:flex; gap:16px; align-items:baseline; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; font-weight:650; }
+  nav a { text-decoration:none; color:var(--muted); margin-right:12px; }
+  nav a.on { color:var(--ink); font-weight:650; }
+  main { max-width:1100px; margin:0 auto; padding:20px; display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; }
+  .card video { width:100%; background:#000; aspect-ratio:9/16; max-height:60vh; }
+  .body { padding:12px 14px; display:flex; flex-direction:column; gap:10px; }
+  .meta { font-size:13px; color:var(--muted); }
+  .meta b { color:var(--ink); font-weight:600; }
+  .srcs { font-size:12px; color:var(--muted); }
+  .srcs a { color:inherit; }
+  details summary { cursor:pointer; font-size:13px; color:var(--muted); }
+  textarea { width:100%; font:13px/1.4 inherit; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); resize:vertical; }
+  label { font-size:12px; color:var(--muted); display:block; margin-top:6px; }
+  .row { display:flex; gap:8px; margin-top:4px; }
+  button { flex:1; padding:9px 10px; border:1px solid var(--line); border-radius:8px; font:inherit; font-weight:600; cursor:pointer; background:var(--bg); color:var(--ink); }
+  button.ok { border-color:var(--ok); color:var(--ok); }
+  button.no { border-color:var(--no); color:var(--no); }
+  button:disabled { opacity:.5; cursor:default; }
+  .state { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+  .state.approved { color:var(--ok); }
+  .state.rejected { color:var(--no); }
+  .state.pending { color:var(--muted); }
+  .empty { grid-column:1/-1; text-align:center; color:var(--muted); padding:60px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>social-peace review</h1>
+  <nav>
+    {% for f in ['pending','approved','rejected','all'] %}
+      <a href="?filter={{f}}" class="{{ 'on' if f == filt else '' }}">{{f}} ({{ counts[f] }})</a>
+    {% endfor %}
+  </nav>
+</header>
+<main id="grid">
+  {% if not videos %}<p class="empty">Nothing {{ filt }}.</p>{% endif %}
+  {% for v in videos %}
+  <article class="card" data-stem="{{ v.id }}">
+    {% if v._has_video %}
+    <video controls preload="metadata" src="/media/{{ v.id }}.mp4"></video>
+    {% else %}
+    <div class="meta" style="padding:12px 14px">⚠ mp4 missing</div>
+    {% endif %}
+    <div class="body">
+      <div class="meta">
+        <b>{{ v.template }}</b> · {{ '%.0f'|format(v.duration_seconds or 0) }}s · seed {{ v.seed }}
+        · <span class="state {{ v.review.state }}">{{ v.review.state }}</span>
+      </div>
+      <div class="meta">“{{ v.overlay_text }}”</div>
+      <div class="srcs">
+        clips:
+        {% for name, url in (v.source_urls.video or {}).items() %}
+          {% if url %}<a href="{{ url }}" target="_blank" rel="noreferrer">{{ name }}</a>{% else %}{{ name }} (no link){% endif %}{{ ", " if not loop.last }}
+        {% endfor %}
+        <br>audio:
+        {% for name, url in (v.source_urls.audio or {}).items() %}
+          {% if url %}<a href="{{ url }}" target="_blank" rel="noreferrer">{{ name }}</a>{% else %}{{ name }} (no link){% endif %}{{ ", " if not loop.last }}
+        {% endfor %}
+      </div>
+      <details>
+        <summary>captions</summary>
+        <label>YouTube title</label>
+        <textarea rows="2" data-f="youtube.title">{{ v.platforms.youtube.title }}</textarea>
+        <label>YouTube description</label>
+        <textarea rows="4" data-f="youtube.description">{{ v.platforms.youtube.description }}</textarea>
+        <label>TikTok caption</label>
+        <textarea rows="3" data-f="tiktok.caption">{{ v.platforms.tiktok.caption }}</textarea>
+        <label>Instagram caption</label>
+        <textarea rows="3" data-f="instagram.caption">{{ v.platforms.instagram.caption }}</textarea>
+      </details>
+      <label>note (optional)</label>
+      <textarea rows="1" class="note" placeholder="why approved / rejected"></textarea>
+      <div class="row">
+        <button class="ok" data-state="approved">Approve</button>
+        <button class="no" data-state="rejected">Reject</button>
+      </div>
+    </div>
+  </article>
+  {% endfor %}
+</main>
+<script>
+async function decide(card, state) {
+  const stem = card.dataset.stem;
+  const captions = { youtube:{}, tiktok:{}, instagram:{} };
+  card.querySelectorAll('textarea[data-f]').forEach(t => {
+    const [plat, field] = t.dataset.f.split('.');
+    captions[plat][field] = t.value;
+  });
+  const note = card.querySelector('.note').value;
+  const btns = card.querySelectorAll('button');
+  btns.forEach(b => b.disabled = true);
+  try {
+    const r = await fetch('/api/decision/' + encodeURIComponent(stem), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state, note, captions }),
+    });
+    if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+    const badge = card.querySelector('.state');
+    badge.textContent = state;
+    badge.className = 'state ' + state;
+    card.style.opacity = 0.55;
+  } catch (e) {
+    alert('failed: ' + e.message);
+    btns.forEach(b => b.disabled = false);
+  }
+}
+document.querySelectorAll('.card').forEach(card => {
+  card.querySelectorAll('button[data-state]').forEach(b =>
+    b.addEventListener('click', () => decide(card, b.dataset.state)));
+});
+</script>
+</body>
+</html>
