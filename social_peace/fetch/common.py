@@ -85,3 +85,17 @@ def append_manifest_stub(manifest_path: Path, kind: str, filename: str, entry: d
     manifest_path.write_text(
         yaml.safe_dump(data, sort_keys=True, allow_unicode=True), encoding="utf-8"
     )
+
+
+def remove_manifest_entry(manifest_path: Path, kind: str, filename: str) -> bool:
+    """Drop one provenance entry from assets/manifest.yaml. Returns True if removed."""
+    if not manifest_path.exists():
+        return False
+    data = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+    if filename in (data.get(kind) or {}):
+        del data[kind][filename]
+        manifest_path.write_text(
+            yaml.safe_dump(data, sort_keys=True, allow_unicode=True), encoding="utf-8"
+        )
+        return True
+    return False

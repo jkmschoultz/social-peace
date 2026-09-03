@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>social-peace assets</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f6f4; --card:#fff; --line:#e2e2dc; --ink:#1c1c1a; --muted:#6b6b63; --no:#a12b2b; --go:#1d5fb0; --warn:#9a6b1a; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#15150f; --card:#20201a; --line:#33332a; --ink:#ececdf; --muted:#9a9a8c; --no:#e06a6a; --go:#5aa0f0; --warn:#d0a24a; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); padding:14px 20px; display:flex; gap:16px; align-items:baseline; }
+  header h1 { font-size:16px; margin:0; font-weight:650; }
+  header a { color:var(--muted); text-decoration:none; }
+  main { max-width:1000px; margin:0 auto; padding:20px; }
+  h2 { font-size:14px; font-weight:650; margin:24px 0 8px; }
+  .row { display:grid; grid-template-columns:auto 1fr auto; gap:12px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); }
+  .row .prev { width:120px; }
+  .row .prev video, .row .prev audio { width:120px; }
+  .row .prev audio { height:32px; }
+  .name { font-weight:600; word-break:break-all; }
+  .meta { font-size:12px; color:var(--muted); }
+  .meta a { color:var(--go); }
+  .used { color:var(--warn); font-weight:600; }
+  button { padding:7px 12px; border:1px solid var(--no); border-radius:8px; background:var(--bg); color:var(--no); font:inherit; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  .empty { color:var(--muted); padding:12px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>assets</h1>
+  <a href="/">← back to review</a>
+  <label class="meta">show
+    <select id="assetFilter">
+      {% for f in filters %}<option value="{{f}}" {{ 'selected' if f == filt }}>{{f}}</option>{% endfor %}
+    </select>
+  </label>
+</header>
+<main>
+  {% for kind, rows, total in [('video', video, total_video), ('audio', audio, total_audio)] %}
+  <h2>{{ kind }} — <span id="count-{{ kind }}">{{ rows|length }}</span>{% if filt != 'all' %} of {{ total }}{% endif %} in the pool</h2>
+  {% if not rows %}<p class="empty">none{% if filt != 'all' %} match “{{ filt }}”{% endif %}</p>{% endif %}
+  {% for r in rows %}
+  <div class="row" data-kind="{{ kind }}" data-name="{{ r.name }}">
+    <div class="prev">
+      {% if kind == 'video' %}
+        <video preload="none" muted controls src="/asset-media/video/{{ r.name }}"></video>
+      {% else %}
+        <audio preload="none" controls src="/asset-media/audio/{{ r.name }}"></audio>
+      {% endif %}
+    </div>
+    <div>
+      <div class="name">{{ r.name }}</div>
+      <div class="meta">
+        {{ (r.size / 1048576)|round(1) }} MB{% if r.duration %} · {{ r.duration|round|int }}s{% endif %}
+        {%- if r.tags %} · {{ r.tags|join(', ') }}{% endif %}
+        {%- if r.states %} · <span class="used">in {{ r.states|join(', ') }}</span>{% endif %}
+      </div>
+      <div class="meta">
+        {{ r.license or 'no license recorded' }}
+        {%- if r.source %} — {{ r.source }}{% endif %}
+        {%- if r.url %} <a href="{{ r.url }}" target="_blank" rel="noreferrer">↗</a>{% endif %}
+      </div>
+    </div>
+    <button class="rm">remove</button>
+  </div>
+  {% endfor %}
+  {% endfor %}
+</main>
+<script>
+const assetFilter = document.getElementById('assetFilter');
+if (assetFilter) assetFilter.addEventListener('change', () => {
+  location.href = '/assets?filter=' + encodeURIComponent(assetFilter.value);
+});
+
+document.querySelectorAll('.row .rm').forEach(btn => btn.addEventListener('click', async () => {
+  const row = btn.closest('.row');
+  const { kind, name } = row.dataset;
+  const used = row.querySelector('.used');
+  const msg = 'Delete ' + name + '?' + (used ? '\n\nA render already uses it; its finished mp4 is unaffected, but future renders and ↻ variants can no longer use this file.' : '');
+  if (!confirm(msg)) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/asset/' + kind + '/' + encodeURIComponent(name) + '/delete', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+    row.remove();
+    document.getElementById('count-' + kind).textContent = j.pool_size;
+  } catch (e) {
+    btn.disabled = false;
+    alert('failed: ' + e.message);
+  }
+}));
+</script>
+</body>
+</html>

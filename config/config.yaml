@@ -82,6 +82,10 @@ captions:
   effort: low              # low | medium | high | xhigh | max
   max_output_tokens: 700
 
+retention:
+  rejected_days: 30        # `prune` and the review server on startup delete
+                           # rejected renders older than this (frees output/ space)
+
 metadata:
   youtube:
     title_templates:

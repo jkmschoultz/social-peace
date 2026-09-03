@@ -120,10 +120,14 @@ def build_one(
     dry_run: bool = False,
     used_video: set[str] | None = None,
     used_audio: set[str] | None = None,
+    pin: dict | None = None,
+    exclude_text: str | None = None,
+    extra_meta: dict | None = None,
 ) -> dict:
     sel = build_selection(
         cfg, seed=seed, template_name=template_name, duration=duration,
         used_video=used_video, used_audio=used_audio,
+        pin=pin, exclude_text=exclude_text,
     )
 
     w, h = cfg.render["resolution"]
@@ -188,15 +192,19 @@ def build_one(
         overlay_png.unlink(missing_ok=True)
         return {
             "id": stem, "video": None, "template": sel.template["name"], "seed": seed,
+            "overlay_text": sel.text,
             "sources": {
                 "video": [c.path.name for c in sel.clips],
                 "audio": [a.path.name for a in sel.audio],
             },
             "dry_run": True,
+            **(extra_meta or {}),
         }
 
     metadata = build_metadata(cfg, sel, video_path)
     metadata["duration_seconds"] = round(total, 2)
+    if extra_meta:
+        metadata.update(extra_meta)
     sidecar = write_sidecar(metadata, video_path)
 
     if not cfg.render.get("keep_overlay_png", False):

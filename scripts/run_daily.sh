@@ -21,9 +21,11 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] social-peace $STEP  (python: $PY)"
 case "$STEP" in
   pipeline)         "$PY" -m social_peace pipeline ;;
   publish-approved) "$PY" -m social_peace publish-approved ;;
+  prune)            "$PY" -m social_peace prune ;;
   all)
     "$PY" -m social_peace pipeline
     "$PY" -m social_peace publish-approved
+    "$PY" -m social_peace prune          # drop rejected renders past retention.rejected_days
     ;;
-  *) echo "usage: run_daily.sh [pipeline|publish-approved|all]" >&2; exit 2 ;;
+  *) echo "usage: run_daily.sh [pipeline|publish-approved|prune|all]" >&2; exit 2 ;;
 esac

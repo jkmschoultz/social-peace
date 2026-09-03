@@ -40,8 +40,24 @@ logs/                  social_peace.log + posts.jsonl ledger (gitignored)
 python -m social_peace pipeline               # uses config/config.yaml -> pipeline:
 python -m social_peace pipeline --no-fetch     # just render from the current asset pool
 
-# 2. review: play each render, edit captions, Approve / Reject, then Publish
+# 2. review: tabs pending / approved / published / rejected. Play each render,
+#    edit captions, Approve / Reject, then Publish (published renders move to the
+#    published tab). Header buttons: "+ Generate new content" (render another
+#    batch), "Fetch clips" / "Fetch audio" (top up the asset library for future
+#    runs). Every card has "↻ clips / ↻ audio / ↻ text" to re-render it with one
+#    thing swapped. Sort dropdown (newest / oldest / seed / template / status).
+#    The "assets" nav link lists every clip / bed (source, licence, size, which
+#    render states use it) with a per-usage filter and a remove button. The
+#    rejected tab has an "Empty rejected" button.
 python -m social_peace review                  # http://127.0.0.1:8756
+
+# reclaim output/ space — drop rejected renders (cron this; the review server
+# also does it on startup, per retention.rejected_days in config.yaml)
+python -m social_peace prune                    # older than 30 days
+python -m social_peace prune --all              # every rejected render
+
+# re-render one video with a single dimension re-picked (CLI equivalent of ↻)
+python -m social_peace variant <stem> --change audio
 
 # 3. or publish from the CLI: everything approved and not already posted
 python -m social_peace publish-approved
@@ -177,6 +193,11 @@ late rather than skip.
 - [x] Local web review interface (`review`) + `publish-approved`
 - [x] Publish button in the review UI (single + all-approved)
 - [x] Batch-aware selection: avoid clip reuse, spread audio, pair audio↔scene
+- [x] Variants: re-render one video with just clips / audio / text swapped (`variant` + UI ↻)
+- [x] "Generate new content" button in the review UI (background render job)
+- [x] "Fetch clips" / "Fetch audio" buttons — top up the asset library on demand
+- [x] Assets page — list + preview + remove every clip/bed, filter by usage
+- [x] Sort the review grid; `prune` rejected renders (30-day auto + button)
 - [x] TikTok Content Posting API publisher (skeleton — not yet run live)
 - [x] Instagram Graph API (Reels) publisher + auto cloudflared tunnel for the fetch
 - [ ] YouTube: submit for verification (lifts private-only + 7-day token)

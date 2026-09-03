@@ -11,7 +11,7 @@ from social_peace import ledger
 from social_peace.config import Config
 from social_peace.fetch.common import promote_incoming
 from social_peace.pipeline.assemble import build_one
-from social_peace.pipeline.selectors import VIDEO_EXTS, _list_media
+from social_peace.pipeline.selectors import AUDIO_EXTS, VIDEO_EXTS, _list_media
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +35,55 @@ def _fetch_audio(cfg: Config, query: str, limit: int) -> list[str]:
     return freesound.fetch(cfg, query, limit=limit)
 
 
+def _promote_and_count(cfg: Config, kind: str) -> tuple[int, int]:
+    folder = cfg.path("video_assets" if kind == "video" else "audio_assets")
+    exts = VIDEO_EXTS if kind == "video" else AUDIO_EXTS
+    moved = len(promote_incoming(folder))
+    return moved, len(_list_media(folder, exts))
+
+
+def fetch_video_library(cfg: Config, *, limit: int | None = None) -> dict:
+    """Pull stock clips — one rotating query per configured source — and
+    auto-promote them into assets/video/ for future renders."""
+    pcfg = cfg.raw.get("pipeline", {})
+    limit = int(limit or pcfg.get("fetch_per_run", 6))
+    vqueries = pcfg.get("queries", {}).get("video", []) or [None]
+    rng = random.Random()
+    fetched, notes = 0, []
+    for source in pcfg.get("fetch_sources", ["pexels", "pixabay"]):
+        q = rng.choice(vqueries)
+        try:
+            got = _fetch_video(cfg, source, q, limit)
+            fetched += len(got)
+            notes.append(f"{source} '{q}': {len(got)}")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("fetch_video_library: %s '%s' failed: %s", source, q, exc)
+            notes.append(f"{source} '{q}': failed")
+    moved, pool = _promote_and_count(cfg, "video")
+    return {"kind": "video", "fetched": fetched, "promoted": moved, "pool_size": pool, "notes": notes}
+
+
+def fetch_audio_library(cfg: Config, *, limit: int | None = None) -> dict:
+    """Pull CC0 beds from Freesound (one rotating query) and auto-promote them
+    into assets/audio/. Needs FREESOUND_API_KEY; without it, a no-op."""
+    pcfg = cfg.raw.get("pipeline", {})
+    limit = int(limit or pcfg.get("fetch_per_run", 6))
+    aqueries = pcfg.get("queries", {}).get("audio", []) or [None]
+    q = random.Random().choice(aqueries)
+    fetched, notes = 0, []
+    try:
+        got = _fetch_audio(cfg, q, limit)
+        fetched = len(got)
+        notes.append(f"freesound '{q}': {len(got)}")
+    except RuntimeError as exc:            # no FREESOUND_API_KEY
+        notes.append(f"skipped ({exc})")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("fetch_audio_library: %s", exc)
+        notes.append(f"freesound '{q}': failed")
+    moved, pool = _promote_and_count(cfg, "audio")
+    return {"kind": "audio", "fetched": fetched, "promoted": moved, "pool_size": pool, "notes": notes}
+
+
 def run_pipeline(
     cfg: Config,
     *,
@@ -46,9 +95,7 @@ def run_pipeline(
     pcfg = cfg.raw.get("pipeline", {})
     batch = int(batch if batch is not None else pcfg.get("batch_size", 4))
     base_seed = seed if seed is not None else random.randrange(_SEED_MAX)
-    rng = random.Random(base_seed)
 
-    fetched: list[str] = []
     promoted = {"video": 0, "audio": 0}
 
     pool_size = len(_list_media(cfg.path("video_assets"), VIDEO_EXTS))
@@ -56,34 +103,19 @@ def run_pipeline(
         log.info("pipeline: video pool already has %d clips, skipping fetch", pool_size)
         do_fetch = False
 
+    fetched_n = 0
     if do_fetch:
-        per_run = int(pcfg.get("fetch_per_run", 6))
-        vqueries = pcfg.get("queries", {}).get("video", []) or [None]
-        for source in pcfg.get("fetch_sources", ["pexels", "pixabay"]):
-            q = rng.choice(vqueries)
-            try:
-                got = _fetch_video(cfg, source, q, per_run)
-                fetched += got
-                log.info("pipeline: %s '%s' -> %d file(s)", source, q, len(got))
-            except Exception as exc:  # noqa: BLE001
-                log.warning("pipeline: %s fetch failed (%s): %s", source, q, exc)
-
+        v = fetch_video_library(cfg)
+        fetched_n += v["fetched"]
+        promoted["video"] = v["promoted"]
         if pcfg.get("fetch_audio", False):
-            aqueries = pcfg.get("queries", {}).get("audio", []) or [None]
-            q = rng.choice(aqueries)
-            try:
-                got = _fetch_audio(cfg, q, per_run)
-                fetched += got
-                log.info("pipeline: freesound '%s' -> %d file(s)", q, len(got))
-            except RuntimeError as exc:
-                log.warning("pipeline: audio fetch skipped: %s", exc)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("pipeline: freesound fetch failed (%s): %s", q, exc)
-
-    if pcfg.get("auto_promote", True):
+            a = fetch_audio_library(cfg)
+            fetched_n += a["fetched"]
+            promoted["audio"] = a["promoted"]
+    elif pcfg.get("auto_promote", True):
         promoted["video"] = len(promote_incoming(cfg.path("video_assets")))
         promoted["audio"] = len(promote_incoming(cfg.path("audio_assets")))
-        log.info("pipeline: promoted %d video + %d audio", promoted["video"], promoted["audio"])
+    log.info("pipeline: fetched %d, promoted %s", fetched_n, promoted)
 
     from social_peace.pipeline.metadata import sources_in_use
 
@@ -114,7 +146,7 @@ def run_pipeline(
 
     summary = {
         "seed": base_seed,
-        "fetched": len(fetched),
+        "fetched": fetched_n,
         "promoted": promoted,
         "built": built,
         "ok": rc == 0,

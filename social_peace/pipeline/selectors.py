@@ -104,6 +104,14 @@ def _tag_score(cfg: Config, kind: str, path: Path, wanted: list[str]) -> int:
     return len(tags & set(wanted))
 
 
+def _resolve_pins(folder: Path, names: list[str], exts: set[str]) -> list[Path] | None:
+    paths = [folder / n for n in names]
+    if all(p.is_file() and p.suffix.lower() in exts for p in paths):
+        return paths
+    log.warning("pinned files missing in %s (%s) — ignoring the pin", folder, names)
+    return None
+
+
 def build_selection(
     cfg: Config,
     *,
@@ -112,14 +120,22 @@ def build_selection(
     duration: float | None = None,
     used_video: set[str] | None = None,
     used_audio: set[str] | None = None,
+    pin: dict | None = None,
+    exclude_text: str | None = None,
 ) -> Selection:
     """`used_video` / `used_audio` are filenames already spent by other renders in
     the batch (or by other non-rejected sidecars). Unspent assets are preferred so
     a batch doesn't keep reaching for the same clip; clips are then ranked by how
-    well their descriptive tokens match the chosen audio (rain audio -> rainy clip)."""
+    well their descriptive tokens match the chosen audio (rain audio -> rainy clip).
+
+    `pin` = {"video": [names], "audio": [names], "text": str} forces those
+    dimensions to exact values (used to re-render a video with only one thing
+    changed). `exclude_text` drops one line from the overlay-text pool so a
+    text-only re-roll always differs from the original."""
     rng = random.Random(seed)
     used_video = set(used_video or ())
     used_audio = set(used_audio or ())
+    pin = pin or {}
 
     # --- template ---
     if template_name:
@@ -145,14 +161,19 @@ def build_selection(
         )
     stems = max(1, int(template.get("audio", {}).get("stems", 1)))
     wanted_a = list(template.get("audio", {}).get("tags", []))
-    a_ranked = sorted(
-        audio_pool,
-        key=lambda p: (
-            p.name in used_audio,                        # unused first
-            -_tag_score(cfg, "audio", p, wanted_a),      # template tag pref
-            rng.random(),
-        ),
-    )
+    pinned_a = _resolve_pins(cfg.path("audio_assets"), pin["audio"], AUDIO_EXTS) if pin.get("audio") else None
+    if pinned_a is not None:
+        a_ranked = pinned_a
+        stems = len(pinned_a)
+    else:
+        a_ranked = sorted(
+            audio_pool,
+            key=lambda p: (
+                p.name in used_audio,                        # unused first
+                -_tag_score(cfg, "audio", p, wanted_a),      # template tag pref
+                rng.random(),
+            ),
+        )
     beds: list[AudioBed] = []
     for p in a_ranked:
         if len(beds) == stems:
@@ -176,23 +197,27 @@ def build_selection(
             f"no video clips in {cfg.path('video_assets')} "
             f"({', '.join(sorted(VIDEO_EXTS))})"
         )
-    n = max(1, _pick_range(rng, template.get("clip_count", 2)))
-    n = min(n, len(video_pool))
+    n_seeded = max(1, _pick_range(rng, template.get("clip_count", 2)))  # keep rng in step
+    pinned_v = _resolve_pins(cfg.path("video_assets"), pin["video"], VIDEO_EXTS) if pin.get("video") else None
+    n = len(pinned_v) if pinned_v is not None else min(n_seeded, len(video_pool))
 
     xdur = float(template.get("transition_duration", 0.0)) if template.get("transition") == "fade" else 0.0
     # segment_duration such that n segments (overlapped by xdur) sum to `target`
     seg = (target + (n - 1) * xdur) / n
 
     wanted_v = list(template.get("video_tags", []))
-    candidates = sorted(
-        video_pool,
-        key=lambda p: (
-            p.name in used_video,                                     # unused first
-            -len(_keywords(cfg, "video", p.name) & audio_kw),         # match the audio
-            -_tag_score(cfg, "video", p, wanted_v),                   # template tag pref
-            rng.random(),
-        ),
-    )
+    if pinned_v is not None:
+        candidates = pinned_v
+    else:
+        candidates = sorted(
+            video_pool,
+            key=lambda p: (
+                p.name in used_video,                                     # unused first
+                -len(_keywords(cfg, "video", p.name) & audio_kw),         # match the audio
+                -_tag_score(cfg, "video", p, wanted_v),                   # template tag pref
+                rng.random(),
+            ),
+        )
     chosen: list[Clip] = []
     for p in candidates:
         if len(chosen) == n:
@@ -202,7 +227,7 @@ def build_selection(
         except Exception as exc:  # noqa: BLE001
             log.warning("skipping unreadable clip %s: %s", p.name, exc)
             continue
-        if d >= seg + 0.4:
+        if pinned_v is not None or d >= seg + 0.4:
             chosen.append(Clip(p, d))
 
     if len(chosen) < n:
@@ -221,10 +246,24 @@ def build_selection(
             "clips shorter than requested; shrank segment to %.1fs, target duration now %.1fs",
             seg, target,
         )
-    rng.shuffle(chosen)
+
+    if pinned_v is not None:
+        shortest = min(c.duration for c in chosen)
+        if shortest < seg + 0.4:
+            seg = max(shortest - 0.4, 1.0)
+            target = n * seg - (n - 1) * xdur
+            log.warning("pinned clips shorter than target; segment -> %.1fs", seg)
+    else:
+        rng.shuffle(chosen)
 
     # --- copy ---
-    text = rng.choice(cfg.raw["overlay_text"])
+    if pin.get("text") is not None:
+        text = pin["text"]
+    else:
+        pool = cfg.raw["overlay_text"]
+        if exclude_text:
+            pool = [t for t in pool if t != exclude_text] or pool
+        text = rng.choice(pool)
     footer = str(cfg.raw.get("overlay_footer", "") or "")
 
     sel = Selection(

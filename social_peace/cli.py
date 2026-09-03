@@ -1,17 +1,20 @@
 """Command-line entrypoint.
 
   social-peace build   [--count N] [--seed S] [--template NAME] [--duration SEC] [--dry-run]
-  social-peace fetch   [--source pixabay|pexels] [--query "..."] [--limit N]
+  social-peace fetch   [--source pixabay|pexels|freesound] [--query "..."] [--limit N] [--promote]
   social-peace publish  VIDEO.mp4 [--platform youtube]
   social-peace run     [--count N]        # build + publish to project.target_platforms
   social-peace pipeline [--batch N] [--no-fetch] [--dry-run]   # scrape -> render a review batch
   social-peace review  [--host H] [--port P]                   # web UI to approve/reject
+  social-peace variant STEM --change video|audio|text          # re-render, one thing swapped
   social-peace publish-approved [--platform P] [--limit N]     # post the approved renders
+  social-peace prune   [--days N] [--all]  # delete rejected renders to free output/ space
   social-peace ledger  [--limit N]        # tail the posts.jsonl ledger
 """
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import random
 import sys
@@ -74,17 +77,21 @@ def cmd_build(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- fetch
 def cmd_fetch(args: argparse.Namespace) -> int:
     cfg = _bootstrap()
-    if args.source == "pixabay":
-        from social_peace.fetch import pixabay as mod
-    else:
-        from social_peace.fetch import pexels as mod
+    kind = "audio" if args.source == "freesound" else "video"
+    mod = __import__(f"social_peace.fetch.{args.source}", fromlist=["fetch"])
     try:
         saved = mod.fetch(cfg, args.query, limit=args.limit)
     except Exception as exc:  # noqa: BLE001
         log.error("fetch failed: %s", exc)
         return 1
-    print(f"saved {len(saved)} file(s) to {cfg.path('video_assets') / '_incoming'}")
-    print("review + license-check, then move the keepers up into assets/video/")
+    assets = cfg.path("video_assets" if kind == "video" else "audio_assets")
+    print(f"saved {len(saved)} file(s) to {assets / '_incoming'}")
+    if args.promote:
+        from social_peace.fetch.common import promote_incoming
+        n = len(promote_incoming(assets))
+        print(f"promoted {n} file(s) into {assets}")
+    else:
+        print("review + license-check, then move the keepers up (or pass --promote)")
     return 0
 
 
@@ -133,6 +140,27 @@ def cmd_run(args: argparse.Namespace) -> int:
             if not publish_one(cfg, video_path, platform).ok:
                 rc = 1
     return rc
+
+
+# --------------------------------------------------------------------------- variant
+def cmd_variant(args: argparse.Namespace) -> int:
+    from social_peace import ledger
+    from social_peace.pipeline.variant import make_variant
+
+    cfg = _bootstrap()
+    side = cfg.path("output") / f"{Path(args.stem).stem}.json"
+    if not side.is_file():
+        log.error("no sidecar: %s", side)
+        return 1
+    original = json.loads(side.read_text(encoding="utf-8"))
+    res = make_variant(cfg, original, args.change)
+    ledger.record(
+        cfg.path("logs"), "build", video_id=res["id"], template=res["template"],
+        seed=res["seed"], duration=res.get("duration"), sources=res.get("sources"),
+        variant_of=original["id"], variant_change=args.change, ok=True,
+    )
+    print(res["video"])
+    return 0
 
 
 # -------------------------------------------------------------------------- pipeline
@@ -187,6 +215,19 @@ def cmd_publish_approved(args: argparse.Namespace) -> int:
     return rc
 
 
+# ---------------------------------------------------------------------------- prune
+def cmd_prune(args: argparse.Namespace) -> int:
+    from social_peace.pipeline.prune import prune_rejected
+
+    cfg = _bootstrap()
+    days = None if args.all else args.days
+    removed = prune_rejected(cfg, older_than_days=days, drop_all=args.all)
+    print(f"pruned {len(removed)} rejected render(s)")
+    for r in removed:
+        print(f"  {r}")
+    return 0
+
+
 # -------------------------------------------------------------------------- ledger
 def cmd_ledger(args: argparse.Namespace) -> int:
     from social_peace import ledger
@@ -222,10 +263,11 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--dry-run", action="store_true", help="print the ffmpeg command, render nothing")
     b.set_defaults(func=cmd_build)
 
-    f = sub.add_parser("fetch", help="download stock clips into assets/video/_incoming")
-    f.add_argument("--source", choices=["pixabay", "pexels"], default="pixabay")
+    f = sub.add_parser("fetch", help="download stock video/audio into assets/*/_incoming")
+    f.add_argument("--source", choices=["pixabay", "pexels", "freesound"], default="pixabay")
     f.add_argument("--query", default=None)
     f.add_argument("--limit", type=int, default=5)
+    f.add_argument("--promote", action="store_true", help="move the downloads straight into the pool")
     f.set_defaults(func=cmd_fetch)
 
     pub = sub.add_parser("publish", help="publish one rendered video")
@@ -249,12 +291,22 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--port", type=int, default=8756)
     rv.set_defaults(func=cmd_review)
 
+    vr = sub.add_parser("variant", help="re-render one video with new clips / audio / text")
+    vr.add_argument("stem", help="sidecar stem (or path) of the render to vary")
+    vr.add_argument("--change", required=True, choices=["video", "audio", "text"])
+    vr.set_defaults(func=cmd_variant)
+
     pa = sub.add_parser("publish-approved", help="publish every approved, not-yet-posted render")
     pa.add_argument("--platform", default=None, choices=list(PUBLISHERS),
                     help="override project.target_platforms")
     pa.add_argument("--limit", type=int, default=None, help="cap how many to publish this run")
     pa.add_argument("--dry-run", action="store_true")
     pa.set_defaults(func=cmd_publish_approved)
+
+    pr = sub.add_parser("prune", help="delete rejected renders (default: older than 30 days)")
+    pr.add_argument("--days", type=int, default=30)
+    pr.add_argument("--all", action="store_true", help="delete every rejected render regardless of age")
+    pr.set_defaults(func=cmd_prune)
 
     lg = sub.add_parser("ledger", help="show recent ledger entries")
     lg.add_argument("--limit", type=int, default=20)

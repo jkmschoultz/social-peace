@@ -1,4 +1,5 @@
 import json
+import time
 
 import pytest
 
@@ -6,17 +7,31 @@ from social_peace.config import Config
 from social_peace.review.app import create_app
 
 
+def _wait_job(client, job_id, tries=60):
+    for _ in range(tries):
+        j = client.get("/api/jobs/" + job_id).get_json()
+        if j["state"] != "running":
+            return j
+        time.sleep(0.1)
+    raise AssertionError("job did not finish")
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     cfg = Config.load()
     out = tmp_path / "output"
     logs = tmp_path / "logs"
-    out.mkdir()
-    logs.mkdir()
+    vids = tmp_path / "video"
+    auds = tmp_path / "audio"
+    for d in (out, logs, vids, auds):
+        d.mkdir()
     monkeypatch.setitem(cfg.raw["paths"], "output", str(out))
     monkeypatch.setitem(cfg.raw["paths"], "logs", str(logs))
     # Config.path resolves against cfg.root; use absolute overrides instead.
-    monkeypatch.setattr(cfg, "path", lambda k: {"output": out, "logs": logs}[k])
+    _paths = {"output": out, "logs": logs, "video_assets": vids, "audio_assets": auds}
+    monkeypatch.setattr(cfg, "path", lambda k: _paths[k])
+    monkeypatch.setattr(cfg, "root", tmp_path)
+    monkeypatch.setattr(cfg, "manifest", {})
 
     side = out / "20260101-000000_warm-dawn_1.json"
     side.write_text(json.dumps({
@@ -44,6 +59,33 @@ def test_index_and_filters(client):
     assert c.get("/").status_code == 200
     assert c.get("/api/videos?filter=pending").get_json()[0]["id"].endswith("_1")
     assert c.get("/api/videos?filter=approved").get_json() == []
+
+
+def test_index_sort_param_accepted_and_falls_back(client):
+    c, *_ = client
+    for s in ("newest", "oldest", "seed", "template", "status", "bogus"):
+        assert c.get("/?filter=all&sort=" + s).status_code == 200
+
+
+def test_assets_filter_param(client, tmp_path):
+    c, *_ = client
+    (tmp_path / "video" / "u.mp4").write_bytes(b"x" * 16)
+    for f in ("all", "unused", "used", "pending", "published", "bogus"):
+        assert c.get("/assets?filter=" + f).status_code == 200
+    assert "u.mp4" in c.get("/assets?filter=unused").get_data(as_text=True)
+    assert "u.mp4" not in c.get("/assets?filter=used").get_data(as_text=True)
+
+
+def test_prune_rejected_endpoint(client, tmp_path):
+    c, *_ = client
+    out = tmp_path / "output"
+    stem = "20200101-000000_x_9"
+    (out / f"{stem}.json").write_text(json.dumps({"id": stem, "review": {"state": "rejected", "decided_utc": None}}))
+    (out / f"{stem}.mp4").write_bytes(b"x")
+    r = c.post("/api/prune-rejected", json={"all": True})
+    assert r.status_code == 200
+    assert stem in r.get_json()["removed"]
+    assert not (out / f"{stem}.mp4").exists()
 
 
 def test_decision_persists_state_captions_and_ledger(client):
@@ -148,6 +190,91 @@ def test_publish_endpoint_bad_stem_404(client):
     c, _, _ = client
     assert c.post("/api/publish/..%2f..%2fx").status_code == 404
     assert c.post("/api/publish/nope").status_code == 404
+
+
+def test_variant_endpoint_runs_job(client, monkeypatch):
+    c, side, _ = client
+    from social_peace.pipeline import variant as vmod
+    monkeypatch.setattr(
+        vmod, "make_variant",
+        lambda cfg, orig, change, **kw: {
+            "id": "NEW_" + change, "template": orig["template"], "seed": orig["seed"],
+            "sources": {"video": [], "audio": []}, "duration": 10,
+        },
+    )
+    r = c.post("/api/variant/20260101-000000_warm-dawn_1", json={"change": "audio"})
+    assert r.status_code == 200
+    j = _wait_job(c, r.get_json()["job_id"])
+    assert j["state"] == "done" and j["result"]["id"] == "NEW_audio"
+
+
+def test_variant_endpoint_rejects_bad_change(client):
+    c, *_ = client
+    assert c.post("/api/variant/20260101-000000_warm-dawn_1", json={"change": "x"}).status_code == 400
+
+
+def test_variant_endpoint_404_for_unknown(client):
+    c, *_ = client
+    assert c.post("/api/variant/nope", json={"change": "audio"}).status_code == 404
+
+
+def test_generate_endpoint_runs_job(client, monkeypatch):
+    c, *_ = client
+    from social_peace.pipeline import auto as amod
+    monkeypatch.setattr(amod, "run_pipeline", lambda cfg, **kw: {"built": ["a", "b"], "ok": True})
+    r = c.post("/api/generate", json={})
+    j = _wait_job(c, r.get_json()["job_id"])
+    assert j["state"] == "done" and j["result"]["count"] == 2
+
+
+@pytest.mark.parametrize("kind", ["video", "audio"])
+def test_fetch_endpoint_runs_job(client, monkeypatch, kind):
+    c, *_ = client
+    from social_peace.pipeline import auto as amod
+    monkeypatch.setattr(amod, "fetch_video_library",
+                        lambda cfg, **kw: {"kind": "video", "fetched": 8, "promoted": 8, "pool_size": 70, "notes": []})
+    monkeypatch.setattr(amod, "fetch_audio_library",
+                        lambda cfg, **kw: {"kind": "audio", "fetched": 4, "promoted": 4, "pool_size": 12, "notes": []})
+    j = _wait_job(c, c.post("/api/fetch/" + kind).get_json()["job_id"])
+    assert j["state"] == "done" and j["result"]["kind"] == kind and j["result"]["fetched"] > 0
+
+
+def test_fetch_endpoint_bad_kind(client):
+    c, *_ = client
+    assert c.post("/api/fetch/fonts").status_code == 400
+
+
+def test_assets_page_lists_files(client, tmp_path):
+    c, *_ = client
+    (tmp_path / "video" / "clip-one.mp4").write_bytes(b"x" * 2048)
+    (tmp_path / "audio" / "bed-one.mp3").write_bytes(b"y" * 1024)
+    html = c.get("/assets").get_data(as_text=True)
+    assert c.get("/assets").status_code == 200
+    assert "clip-one.mp4" in html and "bed-one.mp3" in html
+
+
+def test_asset_delete_removes_file(client, tmp_path):
+    c, *_ = client
+    f = tmp_path / "audio" / "bed-two.mp3"
+    f.write_bytes(b"z" * 512)
+    r = c.post("/api/asset/audio/bed-two.mp3/delete")
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    assert not f.exists()
+
+
+def test_asset_delete_bad_kind_and_missing(client):
+    c, *_ = client
+    assert c.post("/api/asset/fonts/x.ttf/delete").status_code == 400
+    assert c.post("/api/asset/audio/nope.mp3/delete").status_code == 404
+    assert c.post("/api/asset/audio/..%2fx/delete").status_code == 404
+
+
+def test_asset_media_serves_and_guards(client, tmp_path):
+    c, *_ = client
+    (tmp_path / "video" / "vv.mp4").write_bytes(b"0123456789" * 20)
+    assert c.get("/asset-media/video/vv.mp4").status_code == 200
+    assert c.get("/asset-media/video/missing.mp4").status_code == 404
+    assert c.get("/asset-media/fonts/x").status_code == 404
 
 
 def test_publish_all_approved_endpoint(client, monkeypatch):

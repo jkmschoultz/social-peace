@@ -35,6 +35,7 @@
   header button { flex:0 0 auto; }
   .state { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
   .state.approved { color:var(--ok); }
+  .state.published { color:var(--go); }
   .state.rejected { color:var(--no); }
   .state.pending { color:var(--muted); }
   .empty { grid-column:1/-1; text-align:center; color:var(--muted); padding:60px 0; }
@@ -44,20 +45,38 @@
   .pub-links a, .pub-out a { color:var(--go); }
   .pub-link:empty { display:none; }
   .pub-out { font-size:12px; color:var(--muted); white-space:pre-wrap; }
+  .var-row .var-btn { font-weight:600; }
+  .var-out { font-size:12px; color:var(--muted); }
+  .var-out a { color:var(--go); }
+  #genBtn, #fetchVidBtn, #fetchAudBtn { flex:0 0 auto; }
+  #genMsg { flex:1 1 100%; }
 </style>
 </head>
 <body>
 <header>
   <h1>social-peace review</h1>
   <nav>
-    {% for f in ['pending','approved','rejected','all'] %}
-      <a href="?filter={{f}}" class="{{ 'on' if f == filt else '' }}">{{f}} ({{ counts[f] }})</a>
+    {% for f in ['pending','approved','published','rejected','all'] %}
+      <a href="?filter={{f}}&sort={{sort}}" class="{{ 'on' if f == filt else '' }}">{{f}} ({{ counts[f] }})</a>
     {% endfor %}
+    <a href="/assets">assets</a>
   </nav>
+  <label class="meta">sort
+    <select id="sortSel">
+      {% for s in sorts %}<option value="{{s}}" {{ 'selected' if s == sort }}>{{s}}</option>{% endfor %}
+    </select>
+  </label>
+  <button id="genBtn">+ Generate new content</button>
+  <button id="fetchVidBtn">⬇ Fetch clips</button>
+  <button id="fetchAudBtn">⬇ Fetch audio</button>
   {% if counts.approved %}
     <button class="go" id="pubAll">Publish {{ counts.approved }} approved
       {%- if platforms %} → {{ platforms|join(', ') }}{% else %} (no platforms set){% endif %}</button>
   {% endif %}
+  {% if filt == 'rejected' and counts.rejected %}
+    <button class="no" id="pruneBtn">Empty rejected ({{ counts.rejected }})</button>
+  {% endif %}
+  <span id="genMsg" class="meta"></span>
 </header>
 <main id="grid">
   {% if not videos %}<p class="empty">Nothing {{ filt }}.</p>{% endif %}
@@ -71,7 +90,8 @@
     <div class="body">
       <div class="meta">
         <b>{{ v.template }}</b> · {{ '%.0f'|format(v.duration_seconds or 0) }}s · seed {{ v.seed }}
-        · <span class="state {{ v.review.state }}">{{ v.review.state }}</span>
+        · <span class="state {{ v._state }}">{{ v._state }}</span>
+        {% if v.variant_of %}· <span title="variant of {{ v.variant_of }}">↻ {{ v.variant_change }}</span>{% endif %}
       </div>
       <div class="meta">“{{ v.overlay_text }}”</div>
       <div class="srcs">
@@ -96,11 +116,18 @@
         <textarea rows="3" data-f="instagram.caption">{{ v.platforms.instagram.caption }}</textarea>
       </details>
       <label>note (optional)</label>
-      <textarea rows="1" class="note" placeholder="why approved / rejected"></textarea>
+      <textarea rows="1" class="note" placeholder="why approved / rejected">{{ v.review.note or '' }}</textarea>
       <div class="row">
         <button class="ok" data-state="approved">Approve</button>
         <button class="no" data-state="rejected">Reject</button>
       </div>
+      <div class="row var-row">
+        <button class="var-btn" data-change="video">↻ clips</button>
+        <button class="var-btn" data-change="audio">↻ audio</button>
+        <button class="var-btn" data-change="text">↻ text</button>
+      </div>
+      <div class="var-out"></div>
+
       {% if v.review.state == 'approved' and platforms %}
       <div class="row pub-row">
         {% for p in platforms %}
@@ -213,11 +240,118 @@ async function decide(card, state) {
   }
 }
 
+async function pollJob(jobId) {
+  for (;;) {
+    await new Promise(r => setTimeout(r, 2500));
+    const r = await fetch('/api/jobs/' + jobId);
+    if (!r.ok) throw new Error('job not found');
+    const j = await r.json();
+    if (j.state === 'done') return j.result;
+    if (j.state === 'error') throw new Error(j.error || 'job failed');
+  }
+}
+
+async function variant(card, btn) {
+  const stem = card.dataset.stem;
+  const change = btn.dataset.change;
+  const out = card.querySelector('.var-out');
+  card.querySelectorAll('.var-btn').forEach(b => b.disabled = true);
+  out.textContent = 'rendering a copy with new ' + change + '… (~1 min)';
+  try {
+    const r = await fetch('/api/variant/' + encodeURIComponent(stem), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ change }),
+    });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    const res = await pollJob(j.job_id);
+    out.innerHTML = 'new render (' + change + ' changed): <a href="?filter=pending">' + res.id + ' — review in Pending</a>';
+  } catch (e) {
+    out.textContent = 'failed: ' + e.message;
+  } finally {
+    card.querySelectorAll('.var-btn').forEach(b => b.disabled = false);
+  }
+}
+
 document.querySelectorAll('.card').forEach(card => {
   card.querySelectorAll('button[data-state]').forEach(b =>
     b.addEventListener('click', () => decide(card, b.dataset.state)));
   card.querySelectorAll('.pub-btn').forEach(b =>
     b.addEventListener('click', () => publishPlatform(card, b)));
+  card.querySelectorAll('.var-btn').forEach(b =>
+    b.addEventListener('click', () => variant(card, b)));
+});
+
+const genMsg = document.getElementById('genMsg');
+
+const sortSel = document.getElementById('sortSel');
+if (sortSel) sortSel.addEventListener('change', () => {
+  const u = new URL(location.href);
+  u.searchParams.set('sort', sortSel.value);
+  location.href = u.toString();
+});
+
+const pruneBtn = document.getElementById('pruneBtn');
+if (pruneBtn) pruneBtn.addEventListener('click', async () => {
+  if (!confirm('Delete ALL rejected renders and their video files? (the ledger keeps the history)')) return;
+  pruneBtn.disabled = true;
+  try {
+    const r = await fetch('/api/prune-rejected', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ all: true }),
+    });
+    const j = await r.json();
+    pruneBtn.textContent = 'removed ' + j.count + ' — reloading…';
+    setTimeout(() => location.reload(), 900);
+  } catch (e) {
+    pruneBtn.disabled = false;
+    alert('failed: ' + e.message);
+  }
+});
+
+async function runFetch(btn, kind) {
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = 'fetching ' + kind + '… (~1-2 min)';
+  genMsg.textContent = '';
+  try {
+    const r = await fetch('/api/fetch/' + kind, { method: 'POST' });
+    const { job_id, error } = await r.json();
+    if (error) throw new Error(error);
+    const res = await pollJob(job_id);
+    genMsg.textContent = kind + ': +' + res.fetched + ' fetched, +' + res.promoted +
+      ' added → ' + res.pool_size + ' in the pool' +
+      (res.notes && res.notes.length ? '  [' + res.notes.join('; ') + ']' : '');
+  } catch (e) {
+    genMsg.textContent = kind + ' fetch failed: ' + e.message;
+  } finally {
+    btn.textContent = orig;
+    btn.disabled = false;
+  }
+}
+const fetchVidBtn = document.getElementById('fetchVidBtn');
+const fetchAudBtn = document.getElementById('fetchAudBtn');
+if (fetchVidBtn) fetchVidBtn.addEventListener('click', () => runFetch(fetchVidBtn, 'video'));
+if (fetchAudBtn) fetchAudBtn.addEventListener('click', () => runFetch(fetchAudBtn, 'audio'));
+
+const genBtn = document.getElementById('genBtn');
+if (genBtn) genBtn.addEventListener('click', async () => {
+  genBtn.disabled = true;
+  const orig = genBtn.textContent;
+  genBtn.textContent = 'generating… (a few min)';
+  try {
+    const r = await fetch('/api/generate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    const { job_id } = await r.json();
+    const res = await pollJob(job_id);
+    genMsg.textContent = res.count + ' new render(s) — opening Pending…';
+    setTimeout(() => { location.href = '?filter=pending'; }, 1200);
+  } catch (e) {
+    genBtn.textContent = orig;
+    genBtn.disabled = false;
+    genMsg.textContent = 'generate failed: ' + e.message;
+  }
 });
 
 const pubAll = document.getElementById('pubAll');
