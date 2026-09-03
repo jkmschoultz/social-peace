@@ -82,7 +82,7 @@ def build_metadata(cfg: Config, sel: Selection, video_path: Path) -> dict:
                 "description": description[:4900],
                 "tags": list(yt.get("tags", [])),
                 "categoryId": str(yt.get("category_id", "22")),
-                "privacyStatus": yt.get("privacy", "private"),
+                "privacyStatus": yt.get("privacy", "public"),
                 "madeForKids": bool(yt.get("made_for_kids", False)),
             },
             "tiktok": {
@@ -95,7 +95,7 @@ def build_metadata(cfg: Config, sel: Selection, video_path: Path) -> dict:
                 "hashtags": list(instagram.get("hashtags", [])),
             },
         },
-        "status": {"youtube": "pending", "tiktok": "skipped", "instagram": "skipped"},
+        "status": {"youtube": "pending", "instagram": "pending", "tiktok": "skipped"},
     }
 
 
@@ -109,13 +109,44 @@ def load_sidecar(video_path: Path) -> dict:
     return json.loads(video_path.with_suffix(".json").read_text(encoding="utf-8"))
 
 
+def sources_in_use(output_dir: Path, *, exclude_rejected: bool = True) -> tuple[set[str], set[str]]:
+    """(video_names, audio_names) already used by renders in output/. Rejected
+    renders release their assets; pending + approved ones hold them."""
+    vids: set[str] = set()
+    auds: set[str] = set()
+    for side in output_dir.glob("*.json"):
+        try:
+            md = json.loads(side.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        if exclude_rejected and md.get("review", {}).get("state") == "rejected":
+            continue
+        src = md.get("sources", {})
+        vids.update(src.get("video", []))
+        auds.update(src.get("audio", []))
+    return vids, auds
+
+
 def _write(sidecar_path: Path, md: dict) -> None:
     sidecar_path.write_text(json.dumps(md, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def mark_status(sidecar_path: Path, platform: str, state: str) -> dict:
+def mark_status(
+    sidecar_path: Path,
+    platform: str,
+    state: str,
+    *,
+    url: str | None = None,
+    remote_id: str | None = None,
+) -> dict:
     md = json.loads(sidecar_path.read_text(encoding="utf-8"))
     md.setdefault("status", {})[platform] = state
+    if url or remote_id:
+        md.setdefault("published", {})[platform] = {
+            "url": url,
+            "remote_id": remote_id,
+            "utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
     _write(sidecar_path, md)
     return md
 

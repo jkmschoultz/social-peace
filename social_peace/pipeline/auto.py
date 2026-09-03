@@ -85,12 +85,15 @@ def run_pipeline(
         promoted["audio"] = len(promote_incoming(cfg.path("audio_assets")))
         log.info("pipeline: promoted %d video + %d audio", promoted["video"], promoted["audio"])
 
+    from social_peace.pipeline.metadata import sources_in_use
+
+    used_v, used_a = sources_in_use(cfg.path("output"))
     built: list[str] = []
     rc = 0
     for i in range(batch):
         s = (base_seed + i) % _SEED_MAX
         try:
-            res = build_one(cfg, seed=s, dry_run=dry_run)
+            res = build_one(cfg, seed=s, dry_run=dry_run, used_video=used_v, used_audio=used_a)
         except Exception as exc:  # noqa: BLE001
             log.exception("pipeline: build failed (seed=%s)", s)
             if not dry_run:
@@ -103,10 +106,11 @@ def run_pipeline(
                 video_id=res["id"], template=res["template"], seed=s,
                 duration=res.get("duration"), sources=res.get("sources"), ok=True,
             )
-            built.append(res["id"])
             print(res["video"])
-        else:
-            built.append(res["id"])
+        built.append(res["id"])
+        srcs = res.get("sources") or {}
+        used_v.update(srcs.get("video", []))
+        used_a.update(srcs.get("audio", []))
 
     summary = {
         "seed": base_seed,

@@ -2,9 +2,10 @@
 # Paths are resolved relative to the repo root.
 
 project:
-  # Platforms the `run` / `publish-approved` commands will attempt to publish to.
-  # Only "youtube" is wired up so far; tiktok / instagram are skipped stubs.
-  target_platforms: [youtube]
+  # Platforms the review UI's Publish button, `run`, and `publish-approved` target.
+  # youtube: live.  instagram: live via an ephemeral cloudflared tunnel (or
+  # INSTAGRAM_PUBLIC_BASE_URL).  tiktok: skeleton, add it here once its .env is set.
+  target_platforms: [youtube, instagram]
   timezone: "America/Los_Angeles"
 
 # `social-peace pipeline`: scrape -> auto-promote -> render a batch for review.
@@ -85,21 +86,21 @@ metadata:
   youtube:
     title_templates:
       - "{hook} 🌿 #shorts"
-      - "A 60-second reset 🌊 #shorts"
       - "{hook} #shorts #calm"
-      - "One quiet minute 🌙 #shorts"
+      - "{hook} — a 60-second reset 🌊 #shorts"
       - "{hook} #shorts #calm #relax"
-      - "A still minute for a loud day 🌿 #shorts"
-      - "Press pause on everything 🌊 #shorts"
       - "{hook} 🤍 #shorts #mindfulness"
-      - "60 seconds of nothing 🍃 #shorts"
       - "{hook} 🌙 #shorts"
+      - "{hook} — press pause 🍃 #shorts"
+      - "{hook} #shorts #relax #nature"
     description: |
       A short calming break — original ambient nature footage and sound.
       No doom-scrolling here. Follow for a daily reset.
     tags: [calm, relax, nature, ambient, mindfulness, breathe, shorts, lofi]
     category_id: "22"          # People & Blogs
-    privacy: private           # start private; flip to "public" once your app/channel is verified
+    privacy: public            # NOTE: YouTube forces uploads to private + locks them
+                               # while the OAuth consent screen is in "Testing" mode.
+                               # Move it to "In production" for this to take effect.
     made_for_kids: false
   hashtags:
     - "#calm"
@@ -114,15 +115,13 @@ metadata:
   tiktok:
     caption_templates:
       - "{hook} 🌿"
-      - "a minute of quiet 🌊"
       - "{hook} — breathe with me"
-      - "one slow minute 🌙"
-      - "let this be your pause"
       - "{hook} — stay a minute"
-      - "nothing to do here but breathe 🌊"
-      - "close your eyes after this one 🤍"
-      - "a small rest, right now 🍃"
       - "{hook} 🌙"
+      - "{hook}\n\nlet this be your pause"
+      - "{hook} 🌊 close your eyes after this one"
+      - "{hook} 🍃 a small rest, right now"
+      - "{hook} — one slow minute"
     hashtags: ["#calm", "#relax", "#nature", "#breathe", "#fyp"]
     privacy: "SELF_ONLY"        # TikTok API value; start private, flip after review of the flow
   instagram:
@@ -131,9 +130,9 @@ metadata:
       - "{hook}"
       - "{hook}\n\nsave this for a hard day 🍃"
       - "{hook}\n\none minute. that's all this asks."
-      - "A pause, in case no one told you to take one. 🌿"
+      - "{hook}\n\na pause, in case no one told you to take one 🌿"
       - "{hook}\n\nbreathe with it 🌊"
-      - "Come back to this when the day gets loud. 🌙"
+      - "{hook}\n\ncome back to this when the day gets loud 🌙"
       - "{hook}\n\nlet your shoulders drop 🤍"
 
 fetch:

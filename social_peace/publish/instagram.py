@@ -1,34 +1,32 @@
-"""Instagram Reels publisher via the Instagram Graph API.
+"""Instagram Reels publisher — supports both current Meta setups for the
+"Manage messaging and content on Instagram" use case:
 
-STATUS: skeleton — the container -> poll -> publish flow is written but has not
-been run against the real API.
+  * API setup with **Instagram Login** (graph.instagram.com) — no Facebook Page.
+    Add the account under the app's "Generate access tokens", copy the token to
+    INSTAGRAM_ACCESS_TOKEN. Nothing else needed — the IG id is read from /me.
+  * API setup with **Facebook Login** (graph.facebook.com) — IG Business/Creator
+    account linked to a Facebook Page. Token needs `instagram_basic`,
+    `instagram_content_publish`, `pages_read_engagement`, `pages_show_list`,
+    `business_management`. Also set INSTAGRAM_USER_ID to the numeric IG business
+    account id (GET /{page-id}?fields=instagram_business_account).
 
-IMPORTANT — Instagram will not accept a file upload. It fetches the video from a
-**public HTTPS URL** you provide. A local render in output/ is not reachable, so
-you must host it somewhere public first. Set:
-    INSTAGRAM_PUBLIC_BASE_URL   e.g. https://media.example.com/social-peace
-and make sure `<INSTAGRAM_PUBLIC_BASE_URL>/<video filename>` serves the mp4.
+Which one you're on is auto-detected from the token. `instagram_content_publish`
+(advanced access) needs App Review to post to accounts you don't own; your own
+account works while the app is in development.
 
-SETUP (before the first run):
-  1. Convert the target Instagram account to a **Business or Creator** account and
-     link it to a Facebook Page.
-  2. https://developers.facebook.com -> create an app (type "Business"). Add the
-     "Instagram Graph API" product. Get a long-lived User (or Page) access token
-     with `instagram_basic`, `instagram_content_publish`, `pages_read_engagement`.
-     Production posting to accounts you don't own needs App Review for
-     `instagram_content_publish`; your own account works in dev mode.
-  3. Find the IG user id: GET /me/accounts -> page id -> GET /{page-id}?fields=
-     instagram_business_account. Put values in .env:
-       INSTAGRAM_USER_ID, INSTAGRAM_ACCESS_TOKEN, INSTAGRAM_PUBLIC_BASE_URL
-     optional: INSTAGRAM_API_VERSION (default v21.0)
+Instagram will not accept a file upload; it fetches the video from a public HTTPS
+URL. Set INSTAGRAM_PUBLIC_BASE_URL to a host you control, or leave it unset and
+this module spins an ephemeral Cloudflare quick tunnel (`cloudflared` binary
+required) over the render for the few seconds Instagram needs, then tears it down.
 
-DOCS: https://developers.facebook.com/docs/instagram-api/guides/content-publishing
+DOCS: https://developers.facebook.com/docs/instagram-platform/content-publishing
 """
 from __future__ import annotations
 
 import logging
 import os
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 import requests
@@ -38,25 +36,37 @@ from social_peace.publish.base import PublishResult
 log = logging.getLogger(__name__)
 
 platform = "instagram"
-_GRAPH = "https://graph.facebook.com"
 _POLL_TIMEOUT_S = 300
 
 
-def _cfg() -> tuple[str, str, str, str]:
-    user_id = os.environ.get("INSTAGRAM_USER_ID")
-    token = os.environ.get("INSTAGRAM_ACCESS_TOKEN")
-    base_url = os.environ.get("INSTAGRAM_PUBLIC_BASE_URL")
-    version = os.environ.get("INSTAGRAM_API_VERSION", "v21.0")
-    missing = [
-        n for n, v in [
-            ("INSTAGRAM_USER_ID", user_id),
-            ("INSTAGRAM_ACCESS_TOKEN", token),
-            ("INSTAGRAM_PUBLIC_BASE_URL", base_url),
-        ] if not v
-    ]
-    if missing:
-        raise RuntimeError(f"instagram not configured — set {', '.join(missing)} in .env")
-    return user_id, token, base_url.rstrip("/"), version
+def _resolve(token: str, user_id_hint: str, version: str) -> tuple[str, str]:
+    """Probe both setups; return (api_base, ig_user_id). Raises RuntimeError with
+    the Graph error(s) if neither works."""
+    # Instagram Login — token is validated against graph.instagram.com/me
+    r = requests.get(
+        f"https://graph.instagram.com/{version}/me",
+        params={"fields": "user_id,username", "access_token": token}, timeout=30,
+    )
+    if r.ok:
+        j = r.json()
+        return f"https://graph.instagram.com/{version}", str(j.get("user_id") or j.get("id"))
+    ig_probe = f"instagram-login probe {r.status_code}: {r.text}"
+
+    # Facebook Login — needs the numeric IG business account id
+    if user_id_hint.isdigit():
+        r2 = requests.get(
+            f"https://graph.facebook.com/{version}/{user_id_hint}",
+            params={"fields": "id", "access_token": token}, timeout=30,
+        )
+        if r2.ok:
+            return f"https://graph.facebook.com/{version}", user_id_hint
+        raise RuntimeError(f"instagram auth failed. {ig_probe}; "
+                           f"facebook-login probe {r2.status_code}: {r2.text}")
+
+    raise RuntimeError(
+        f"instagram auth failed. {ig_probe}. If you set up 'API with Facebook "
+        f"Login', also set INSTAGRAM_USER_ID to the numeric IG business account id."
+    )
 
 
 def _create_container(base: str, user_id: str, token: str, video_url: str, caption: str) -> str:
@@ -113,28 +123,45 @@ def _permalink(base: str, media_id: str, token: str) -> str | None:
         return None
 
 
+def _run(base: str, user_id: str, token: str, video_url: str, caption: str) -> PublishResult:
+    container_id = _create_container(base, user_id, token, video_url, caption)
+    _wait_ready(base, container_id, token)
+    media_id = _publish_container(base, user_id, token, container_id)
+    return PublishResult(
+        platform, ok=True, status="uploaded",
+        url=_permalink(base, media_id, token), remote_id=media_id,
+    )
+
+
 def publish(video_path: Path, metadata: dict) -> PublishResult:
     ig = metadata.get("platforms", {}).get("instagram")
     if not ig:
         return PublishResult(platform, ok=False, status="error", error="no instagram block in sidecar")
 
+    token = (os.environ.get("INSTAGRAM_ACCESS_TOKEN") or "").strip().strip('"').strip("'")
+    if not token:
+        return PublishResult(platform, ok=False, status="error",
+                             error="instagram not configured — set INSTAGRAM_ACCESS_TOKEN in .env")
+
+    version = os.environ.get("INSTAGRAM_API_VERSION", "v21.0")
+    user_id_hint = (os.environ.get("INSTAGRAM_USER_ID") or "").strip()
+    caption = ig.get("caption") or ""
+    public_base = os.environ.get("INSTAGRAM_PUBLIC_BASE_URL")
+
+    # auto-detect the setup + validate the token before spinning up a tunnel
     try:
-        user_id, token, base_url, version = _cfg()
+        base, ig_id = _resolve(token, user_id_hint, version)
     except RuntimeError as exc:
         return PublishResult(platform, ok=False, status="error", error=str(exc))
 
-    base = f"{_GRAPH}/{version}"
-    video_url = f"{base_url}/{video_path.name}"
-    caption = ig.get("caption") or ""
-
     try:
-        container_id = _create_container(base, user_id, token, video_url, caption)
-        _wait_ready(base, container_id, token)
-        media_id = _publish_container(base, user_id, token, container_id)
-        return PublishResult(
-            platform, ok=True, status="uploaded",
-            url=_permalink(base, media_id, token), remote_id=media_id,
-        )
+        if public_base:
+            ctx = nullcontext(f"{public_base.rstrip('/')}/{video_path.name}")
+        else:
+            from social_peace.publish._tunnel import public_file
+            ctx = public_file(video_path)
+        with ctx as video_url:
+            return _run(base, ig_id, token, video_url, caption)
     except (RuntimeError, TimeoutError) as exc:
         log.error("instagram: %s", exc)
         return PublishResult(platform, ok=False, status="error", error=str(exc))

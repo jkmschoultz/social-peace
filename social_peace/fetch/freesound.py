@@ -21,6 +21,7 @@ from social_peace.fetch.common import (
     append_manifest_stub,
     download,
     incoming_audio_dir,
+    query_tags,
     slugify,
 )
 
@@ -72,7 +73,7 @@ def fetch(cfg: Config, query: str | None = None, *, limit: int = 5) -> list[str]
             append_manifest_stub(
                 manifest_path, "audio", name,
                 {
-                    "tags": [],
+                    "tags": query_tags(query),
                     "source": f"Freesound — {h.get('username', 'unknown')}",
                     "license": "CC0",
                     "url": h.get("url", ""),

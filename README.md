@@ -40,10 +40,10 @@ logs/                  social_peace.log + posts.jsonl ledger (gitignored)
 python -m social_peace pipeline               # uses config/config.yaml -> pipeline:
 python -m social_peace pipeline --no-fetch     # just render from the current asset pool
 
-# 2. review: play each render, edit captions, Approve / Reject
+# 2. review: play each render, edit captions, Approve / Reject, then Publish
 python -m social_peace review                  # http://127.0.0.1:8756
 
-# 3. publish everything that got approved (and isn't already posted)
+# 3. or publish from the CLI: everything approved and not already posted
 python -m social_peace publish-approved
 python -m social_peace publish-approved --dry-run   # show what would go, post nothing
 ```
@@ -54,9 +54,30 @@ python -m social_peace publish-approved --dry-run   # show what would go, post n
 at `review.state: pending`. Audio scraping needs `FREESOUND_API_KEY`; without it
 that step is skipped and the existing `assets/audio/` is used. The review UI
 shows every source clip's Pexels/Pixabay/Freesound link so the licence +
-model-release check happens per video. `publish-approved` only touches sidecars
-with `review.state: approved`; `tiktok` / `instagram` in `target_platforms` are
-logged as skipped stubs until those publishers exist.
+model-release check happens per video.
+
+**Asset spread:** within a batch (and against other non-rejected renders) the
+selector prefers clips/audio it hasn't used yet, so a run doesn't keep reaching
+for the same clip. Rejecting a render frees its assets. Clips are then ranked by
+how well their tokens/manifest tags match the chosen audio's — a `rain` bed lands
+on a waterfall/stream clip (`_THEME` in `pipeline/selectors.py` maps the
+keywords). Fetched files carry their search query as manifest tags to feed this.
+
+**Publishing:** the review page's approved filter has one **Publish** button per
+platform on each card, plus a **Publish all approved** button in the header. All
+post to `project.target_platforms ∩ {youtube, tiktok, instagram}` and write each
+platform's result into the sidecar `status`. A platform button greys out (✓) once
+that video's status is `uploaded` / `published` / `already-published`, and the
+ledger dedupe blocks a re-post even if you force it.
+
+- **youtube** — live. `<`/`>` are swapped for look-alikes (YouTube rejects them).
+  Testing-mode OAuth forces `private` uploads.
+- **instagram** — live. Works with either Meta setup (Instagram Login *or*
+  Facebook Login — auto-detected from the token; see `.env.example`). Instagram
+  pulls the video from a URL, so if `INSTAGRAM_PUBLIC_BASE_URL` is unset the
+  publisher spins an ephemeral `cloudflared` quick tunnel over the render for the
+  duration of the fetch, then tears it down (needs `cloudflared` on PATH).
+- **tiktok** — skeleton; add it to `target_platforms` once its `.env` block is set.
 
 **Captions:** the YouTube title/description and TikTok/Instagram captions are
 written fresh per video by Claude (`captions:` in `config.yaml`) — the existing
@@ -154,7 +175,9 @@ late rather than skip.
 - [x] `pipeline` command: scrape + auto-promote + render a review batch
 - [x] Freesound CC0 audio fetcher
 - [x] Local web review interface (`review`) + `publish-approved`
+- [x] Publish button in the review UI (single + all-approved)
+- [x] Batch-aware selection: avoid clip reuse, spread audio, pair audio↔scene
 - [x] TikTok Content Posting API publisher (skeleton — not yet run live)
-- [x] Instagram Graph API (Reels) publisher (skeleton — needs a public video URL)
-- [ ] YouTube: finish config/consent walkthrough, quota-aware cadence
-- [ ] Exercise the TikTok / Instagram publishers against the real APIs
+- [x] Instagram Graph API (Reels) publisher + auto cloudflared tunnel for the fetch
+- [ ] YouTube: submit for verification (lifts private-only + 7-day token)
+- [ ] Exercise the TikTok publisher against the real API

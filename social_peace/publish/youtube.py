@@ -26,6 +26,15 @@ log = logging.getLogger(__name__)
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 platform = "youtube"
 
+# YouTube rejects '<' and '>' anywhere in snippet.title / snippet.description
+# (reason: invalidTitle / invalidDescription). Swap in look-alikes so "<3" etc.
+# survive review-UI edits.
+_ANGLE = str.maketrans({"<": "‹", ">": "›"})
+
+
+def _clean(text: str) -> str:
+    return (text or "").translate(_ANGLE)
+
 
 def _load_credentials():
     from google.auth.transport.requests import Request
@@ -78,13 +87,13 @@ def publish(video_path: Path, metadata: dict) -> PublishResult:
 
     body = {
         "snippet": {
-            "title": yt["title"],
-            "description": yt["description"],
+            "title": _clean(yt["title"])[:100],
+            "description": _clean(yt["description"])[:5000],
             "tags": yt.get("tags", []),
             "categoryId": yt.get("categoryId", "22"),
         },
         "status": {
-            "privacyStatus": yt.get("privacyStatus", "private"),
+            "privacyStatus": yt.get("privacyStatus", "public"),
             "selfDeclaredMadeForKids": bool(yt.get("madeForKids", False)),
         },
     }

@@ -118,8 +118,13 @@ def build_one(
     template_name: str | None = None,
     duration: float | None = None,
     dry_run: bool = False,
+    used_video: set[str] | None = None,
+    used_audio: set[str] | None = None,
 ) -> dict:
-    sel = build_selection(cfg, seed=seed, template_name=template_name, duration=duration)
+    sel = build_selection(
+        cfg, seed=seed, template_name=template_name, duration=duration,
+        used_video=used_video, used_audio=used_audio,
+    )
 
     w, h = cfg.render["resolution"]
     fps = int(cfg.render["fps"])
@@ -181,7 +186,14 @@ def build_one(
 
     if dry_run:
         overlay_png.unlink(missing_ok=True)
-        return {"id": stem, "video": None, "template": sel.template["name"], "seed": seed, "dry_run": True}
+        return {
+            "id": stem, "video": None, "template": sel.template["name"], "seed": seed,
+            "sources": {
+                "video": [c.path.name for c in sel.clips],
+                "audio": [a.path.name for a in sel.audio],
+            },
+            "dry_run": True,
+        }
 
     metadata = build_metadata(cfg, sel, video_path)
     metadata["duration_seconds"] = round(total, 2)

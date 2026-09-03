@@ -25,7 +25,7 @@ def test_metadata_has_all_platform_blocks():
     for plat in ("youtube", "tiktok", "instagram"):
         assert plat in md["platforms"]
     assert md["review"]["state"] == "pending"
-    assert md["status"] == {"youtube": "pending", "tiktok": "skipped", "instagram": "skipped"}
+    assert md["status"] == {"youtube": "pending", "instagram": "pending", "tiktok": "skipped"}
     assert md["platforms"]["tiktok"]["caption"]
     assert md["platforms"]["instagram"]["caption"]
 

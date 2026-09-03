@@ -19,6 +19,12 @@ def slugify(text: str, maxlen: int = 40) -> str:
     return s[:maxlen] or "clip"
 
 
+def query_tags(query: str) -> list[str]:
+    """Descriptive tokens from a search query, kept as manifest tags so the
+    selector can pair e.g. a 'rain' audio bed with a 'rain' clip."""
+    return [t for t in slugify(query).split("-") if len(t) >= 3]
+
+
 def incoming_dir(video_assets: Path) -> Path:
     d = video_assets / INCOMING_SUBDIR
     d.mkdir(parents=True, exist_ok=True)

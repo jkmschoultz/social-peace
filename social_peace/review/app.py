@@ -16,6 +16,12 @@ from flask import Flask, abort, jsonify, render_template, request, send_from_dir
 from social_peace import ledger
 from social_peace.config import Config
 from social_peace.pipeline.metadata import REVIEW_STATES, set_review
+from social_peace.publish.runner import (
+    DONE_STATUSES,
+    available_platforms,
+    publish_all_approved,
+    publish_sidecar,
+)
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +45,8 @@ def _load_all(output_dir: Path) -> list[dict]:
             continue
         md["_has_video"] = side.with_suffix(".mp4").is_file()
         md.setdefault("review", {"state": "pending", "decided_utc": None, "note": ""})
+        md.setdefault("status", {})
+        md.setdefault("published", {})
         md.setdefault("source_urls", {"video": {}, "audio": {}})
         plats = md.setdefault("platforms", {})
         plats.setdefault("youtube", {"title": "", "description": ""})
@@ -68,7 +76,12 @@ def create_app(cfg: Config) -> Flask:
         counts = {s: len(_filtered(rows, s)) for s in ("pending", "approved", "rejected")}
         counts["all"] = len(rows)
         return render_template(
-            "index.html", videos=_filtered(rows, filt), filt=filt, counts=counts
+            "index.html",
+            videos=_filtered(rows, filt),
+            filt=filt,
+            counts=counts,
+            platforms=available_platforms(cfg),
+            done_statuses=list(DONE_STATUSES),
         )
 
     @app.get("/api/videos")
@@ -107,10 +120,29 @@ def create_app(cfg: Config) -> Flask:
         )
         return jsonify(ok=True, review=md["review"])
 
+    @app.post("/api/publish/<stem>")
+    def publish_video(stem: str):
+        stem = _safe_stem(stem)
+        sidecar = output_dir / f"{stem}.json"
+        if not sidecar.is_file():
+            abort(404)
+        platform = (request.get_json(silent=True) or {}).get("platform")
+        if platform:
+            if platform not in available_platforms(cfg):
+                return jsonify(error=f"{platform!r} is not in project.target_platforms"), 400
+            return jsonify(publish_sidecar(cfg, sidecar, platforms=[platform]))
+        return jsonify(publish_sidecar(cfg, sidecar))
+
+    @app.post("/api/publish-approved")
+    def publish_approved_all():
+        return jsonify(reports=publish_all_approved(cfg))
+
     return app
 
 
 def serve(cfg: Config, host: str = "127.0.0.1", port: int = 8756) -> None:
     app = create_app(cfg)
     log.info("review UI on http://%s:%d", host, port)
-    app.run(host=host, port=port, debug=False)
+    # threaded so a slow upload (resumable YouTube / IG container poll) doesn't
+    # freeze the rest of the UI.
+    app.run(host=host, port=port, debug=False, threaded=True)

@@ -12,7 +12,13 @@ import os
 import requests
 
 from social_peace.config import Config
-from social_peace.fetch.common import append_manifest_stub, download, incoming_dir, slugify
+from social_peace.fetch.common import (
+    append_manifest_stub,
+    download,
+    incoming_dir,
+    query_tags,
+    slugify,
+)
 
 log = logging.getLogger(__name__)
 API = "https://api.pexels.com/videos/search"
@@ -66,7 +72,7 @@ def fetch(cfg: Config, query: str | None = None, *, limit: int = 5) -> list[str]
             append_manifest_stub(
                 manifest_path, "video", name,
                 {
-                    "tags": [],
+                    "tags": query_tags(query),
                     "source": f"Pexels — {v.get('user', {}).get('name', 'unknown')}",
                     "license": "Pexels License",
                     "url": v.get("url", ""),

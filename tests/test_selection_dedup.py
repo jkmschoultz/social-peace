@@ -1,0 +1,51 @@
+"""Batch-aware selection: unused clips/audio are preferred so a run doesn't keep
+reaching for the same asset."""
+import pytest
+
+from social_peace.config import Config
+from social_peace.pipeline.selectors import (
+    AUDIO_EXTS,
+    VIDEO_EXTS,
+    _list_media,
+    _themed,
+    build_selection,
+)
+
+_cfg = Config.load()
+_pool_v = _list_media(_cfg.path("video_assets"), VIDEO_EXTS)
+_pool_a = _list_media(_cfg.path("audio_assets"), AUDIO_EXTS)
+_enough = len(_pool_v) >= 6 and len(_pool_a) >= 4
+
+pytestmark = pytest.mark.skipif(not _enough, reason="needs a local asset library (>=6 clips, >=4 beds)")
+
+
+def test_second_render_avoids_first_renders_assets():
+    cfg = Config.load()
+    s1 = build_selection(cfg, seed=101, template_name="warm-dawn")
+    used_v = {c.path.name for c in s1.clips}
+    used_a = {a.path.name for a in s1.audio}
+
+    s2 = build_selection(
+        cfg, seed=102, template_name="warm-dawn",
+        used_video=used_v, used_audio=used_a,
+    )
+    assert used_v.isdisjoint({c.path.name for c in s2.clips})
+    assert used_a.isdisjoint({a.path.name for a in s2.audio})
+
+
+def test_prefers_the_lone_fresh_clip():
+    from social_peace.pipeline.ffmpeg_utils import ffprobe_duration
+
+    cfg = Config.load()
+    # leave exactly one fresh clip, and make it a long one so it always clears
+    # the per-segment duration gate
+    longest = max(_pool_v, key=lambda p: ffprobe_duration(p))
+    used_v = {p.name for p in _pool_v if p.name != longest.name}
+    sel = build_selection(cfg, seed=7, template_name="warm-dawn", used_video=used_v)
+    assert longest.name in [c.path.name for c in sel.clips]
+
+
+def test_themed_expands_rain_to_water_scenes():
+    ex = _themed({"rain"})
+    assert {"water", "waterfall", "stream"} <= ex
+    assert "rain" in ex

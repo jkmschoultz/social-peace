@@ -76,3 +76,91 @@ def test_path_traversal_blocked(client):
 def test_media_404_when_no_sidecar(client):
     c, _, _ = client
     assert c.get("/media/nonexistent.mp4").status_code == 404
+
+
+def test_publish_endpoint_runs_available_platforms(client, monkeypatch):
+    c, side, _ = client
+    side.with_suffix(".mp4").write_bytes(b"x" * 32)
+    # approve it first
+    c.post("/api/decision/20260101-000000_warm-dawn_1", json={"state": "approved"})
+
+    from social_peace.publish import runner
+    from social_peace.publish.base import PublishResult
+
+    calls = []
+
+    def fake_publish_one(cfg, video_path, platform):
+        calls.append(platform)
+        return PublishResult(platform, ok=True, status="uploaded", url=f"https://x/{platform}")
+
+    monkeypatch.setattr(runner, "publish_one", fake_publish_one)
+
+    r = c.post("/api/publish/20260101-000000_warm-dawn_1")
+    body = r.get_json()
+    assert r.status_code == 200
+    assert calls == ["youtube", "instagram"]  # config target_platforms
+    assert {res["platform"] for res in body["results"]} == {"youtube", "instagram"}
+    assert all(res["ok"] and res["status"] == "uploaded" for res in body["results"])
+    # status + per-platform url written back into the sidecar
+    md = json.loads(side.read_text())
+    assert md["status"]["youtube"] == "uploaded"
+    assert md["published"]["youtube"]["url"] == "https://x/youtube"
+    assert md["published"]["instagram"]["url"] == "https://x/instagram"
+
+
+def test_publish_endpoint_single_platform(client, monkeypatch):
+    c, side, _ = client
+    side.with_suffix(".mp4").write_bytes(b"x" * 8)
+    c.post("/api/decision/20260101-000000_warm-dawn_1", json={"state": "approved"})
+
+    from social_peace.publish import runner
+    from social_peace.publish.base import PublishResult
+
+    calls = []
+
+    def fake(cfg, vp, p):
+        calls.append(p)
+        return PublishResult(p, ok=True, status="uploaded")
+
+    monkeypatch.setattr(runner, "publish_one", fake)
+
+    r = c.post("/api/publish/20260101-000000_warm-dawn_1", json={"platform": "instagram"})
+    assert r.status_code == 200
+    assert calls == ["instagram"]
+    assert json.loads(side.read_text())["status"]["instagram"] == "uploaded"
+
+
+def test_publish_endpoint_rejects_unknown_platform(client):
+    c, _, _ = client
+    c.post("/api/decision/20260101-000000_warm-dawn_1", json={"state": "approved"})
+    r = c.post("/api/publish/20260101-000000_warm-dawn_1", json={"platform": "myspace"})
+    assert r.status_code == 400
+
+
+def test_publish_endpoint_refuses_unapproved(client):
+    c, side, _ = client
+    side.with_suffix(".mp4").write_bytes(b"x")
+    r = c.post("/api/publish/20260101-000000_warm-dawn_1")
+    assert r.get_json()["error"] == "not approved"
+
+
+def test_publish_endpoint_bad_stem_404(client):
+    c, _, _ = client
+    assert c.post("/api/publish/..%2f..%2fx").status_code == 404
+    assert c.post("/api/publish/nope").status_code == 404
+
+
+def test_publish_all_approved_endpoint(client, monkeypatch):
+    c, side, _ = client
+    side.with_suffix(".mp4").write_bytes(b"x" * 16)
+    c.post("/api/decision/20260101-000000_warm-dawn_1", json={"state": "approved"})
+
+    from social_peace.publish import runner
+    from social_peace.publish.base import PublishResult
+    monkeypatch.setattr(runner, "publish_one",
+                        lambda cfg, vp, p: PublishResult(p, ok=True, status="uploaded"))
+
+    r = c.post("/api/publish-approved")
+    reports = r.get_json()["reports"]
+    assert len(reports) == 1 and reports[0]["id"] == "20260101-000000_warm-dawn_1"
+    assert reports[0]["results"][0]["ok"] is True

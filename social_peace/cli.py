@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import random
 import sys
@@ -21,6 +20,7 @@ from pathlib import Path
 from social_peace import __version__
 from social_peace.config import Config
 from social_peace.logging_setup import setup_logging
+from social_peace.publish.runner import PUBLISHERS, publish_all_approved, publish_one
 
 log = logging.getLogger("social_peace.cli")
 
@@ -36,10 +36,12 @@ def _bootstrap() -> Config:
 # --------------------------------------------------------------------------- build
 def cmd_build(args: argparse.Namespace) -> int:
     from social_peace.pipeline.assemble import build_one
+    from social_peace.pipeline.metadata import sources_in_use
     from social_peace import ledger
 
     cfg = _bootstrap()
     base_seed = args.seed if args.seed is not None else random.randrange(_SEED_MAX)
+    used_v, used_a = sources_in_use(cfg.path("output"))
     made = []
     for i in range(args.count):
         seed = (base_seed + i) % _SEED_MAX
@@ -47,6 +49,7 @@ def cmd_build(args: argparse.Namespace) -> int:
             res = build_one(
                 cfg, seed=seed, template_name=args.template,
                 duration=args.duration, dry_run=args.dry_run,
+                used_video=used_v, used_audio=used_a,
             )
         except Exception as exc:  # noqa: BLE001
             log.exception("build failed (seed=%s)", seed)
@@ -60,6 +63,9 @@ def cmd_build(args: argparse.Namespace) -> int:
                 duration=res.get("duration"), sources=res.get("sources"), ok=True,
             )
             print(res["video"])
+        srcs = res.get("sources") or {}
+        used_v.update(srcs.get("video", []))
+        used_a.update(srcs.get("audio", []))
         made.append(res)
     log.info("build: %d video(s)", len(made))
     return 0
@@ -83,42 +89,6 @@ def cmd_fetch(args: argparse.Namespace) -> int:
 
 
 # ------------------------------------------------------------------------- publish
-_PUBLISHERS = {
-    "youtube": "social_peace.publish.youtube",
-    "tiktok": "social_peace.publish.tiktok",
-    "instagram": "social_peace.publish.instagram",
-}
-
-
-def _publish_one(cfg: Config, video_path: Path, platform: str) -> bool:
-    import importlib
-
-    from social_peace import ledger
-    from social_peace.pipeline.metadata import load_sidecar
-
-    if platform not in _PUBLISHERS:
-        log.error("no publisher for %r (have: %s)", platform, ", ".join(_PUBLISHERS))
-        return False
-    if ledger.already_published(cfg.path("logs"), video_path.stem, platform):
-        log.info("%s already published to %s, skipping", video_path.name, platform)
-        return True
-
-    metadata = load_sidecar(video_path)
-    mod = importlib.import_module(_PUBLISHERS[platform])
-    result = mod.publish(video_path, metadata)
-    ledger.record(
-        cfg.path("logs"), "publish",
-        video_id=video_path.stem, platform=platform,
-        status=result.status, url=result.url, remote_id=result.remote_id,
-        ok=result.ok, error=result.error,
-    )
-    if result.ok:
-        log.info("%s -> %s (%s)", platform, result.url or result.remote_id, result.status)
-    else:
-        log.error("%s publish failed: %s", platform, result.error)
-    return result.ok
-
-
 def cmd_publish(args: argparse.Namespace) -> int:
     cfg = _bootstrap()
     video_path = Path(args.video).resolve()
@@ -128,8 +98,8 @@ def cmd_publish(args: argparse.Namespace) -> int:
     if not video_path.with_suffix(".json").is_file():
         log.error("missing sidecar: %s", video_path.with_suffix(".json"))
         return 1
-    ok = _publish_one(cfg, video_path, args.platform)
-    return 0 if ok else 1
+    res = publish_one(cfg, video_path, args.platform)
+    return 0 if res.ok else 1
 
 
 # ----------------------------------------------------------------------------- run
@@ -160,7 +130,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         video_path = Path(res["video"])
         for platform in platforms:
-            if not _publish_one(cfg, video_path, platform):
+            if not publish_one(cfg, video_path, platform).ok:
                 rc = 1
     return rc
 
@@ -191,55 +161,28 @@ def cmd_review(args: argparse.Namespace) -> int:
 
 # ------------------------------------------------------------------ publish-approved
 def cmd_publish_approved(args: argparse.Namespace) -> int:
-    from social_peace import ledger
-    from social_peace.pipeline.metadata import mark_status
-
     cfg = _bootstrap()
-    if args.platform:
-        platforms = [args.platform]
-    else:
-        platforms = list(cfg.raw.get("project", {}).get("target_platforms", []))
-    if not platforms:
-        log.error("no platforms (pass --platform or set project.target_platforms)")
-        return 1
-
-    out_dir = cfg.path("output")
-    approved = []
-    for side in sorted(out_dir.glob("*.json")):
-        try:
-            md = json.loads(side.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
-            continue
-        if md.get("review", {}).get("state") == "approved":
-            approved.append(side)
-    if args.limit is not None:
-        approved = approved[: args.limit]
-    if not approved:
+    platforms = [args.platform] if args.platform else None  # None -> available_platforms
+    reports = publish_all_approved(
+        cfg, platforms=platforms, dry_run=args.dry_run, limit=args.limit
+    )
+    if not reports:
         print("no approved videos awaiting publish")
         return 0
 
     rc = 0
-    for side in approved:
-        video_path = side.with_suffix(".mp4")
-        if not video_path.is_file():
-            log.error("mp4 missing for %s", side.stem)
+    for rep in reports:
+        if rep.get("error"):
+            print(f"{rep['id']}: {rep['error']}")
             rc = 1
             continue
-        for platform in platforms:
-            if platform not in _PUBLISHERS:
-                log.info("%s: no publisher (stub) — skipping %s", platform, side.stem)
-                if not args.dry_run:
-                    mark_status(side, platform, "skipped")
-                continue
-            if ledger.already_published(cfg.path("logs"), video_path.stem, platform):
-                log.info("%s already on %s, skipping", video_path.name, platform)
-                continue
+        for r in rep["results"]:
             if args.dry_run:
-                print(f"would publish {video_path.name} -> {platform}")
-                continue
-            ok = _publish_one(cfg, video_path, platform)
-            mark_status(side, platform, "uploaded" if ok else "error")
-            if not ok:
+                print(f"would publish {rep['id']} -> {r['platform']}")
+            elif r["ok"]:
+                print(f"{rep['id']} -> {r['platform']}: {r['status']} {r.get('url') or ''}".rstrip())
+            else:
+                print(f"{rep['id']} -> {r['platform']}: FAILED {r['error']}")
                 rc = 1
     return rc
 
@@ -287,7 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pub = sub.add_parser("publish", help="publish one rendered video")
     pub.add_argument("video", help="path to output/<name>.mp4")
-    pub.add_argument("--platform", choices=list(_PUBLISHERS), default="youtube")
+    pub.add_argument("--platform", choices=list(PUBLISHERS), default="youtube")
     pub.set_defaults(func=cmd_publish)
 
     r = sub.add_parser("run", help="build + publish to project.target_platforms (scheduler entrypoint)")
@@ -307,7 +250,7 @@ def build_parser() -> argparse.ArgumentParser:
     rv.set_defaults(func=cmd_review)
 
     pa = sub.add_parser("publish-approved", help="publish every approved, not-yet-posted render")
-    pa.add_argument("--platform", default=None, choices=list(_PUBLISHERS),
+    pa.add_argument("--platform", default=None, choices=list(PUBLISHERS),
                     help="override project.target_platforms")
     pa.add_argument("--limit", type=int, default=None, help="cap how many to publish this run")
     pa.add_argument("--dry-run", action="store_true")

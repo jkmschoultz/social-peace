@@ -5,13 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>social-peace review</title>
 <style>
-  :root { color-scheme: light dark; --bg:#f6f6f4; --card:#fff; --line:#e2e2dc; --ink:#1c1c1a; --muted:#6b6b63; --ok:#1f7a3d; --no:#a12b2b; }
+  :root { color-scheme: light dark; --bg:#f6f6f4; --card:#fff; --line:#e2e2dc; --ink:#1c1c1a; --muted:#6b6b63; --ok:#1f7a3d; --no:#a12b2b; --go:#1d5fb0; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#15150f; --card:#20201a; --line:#33332a; --ink:#ececdf; --muted:#9a9a8c; --ok:#4bbf72; --no:#e06a6a; }
+    :root { --bg:#15150f; --card:#20201a; --line:#33332a; --ink:#ececdf; --muted:#9a9a8c; --ok:#4bbf72; --no:#e06a6a; --go:#5aa0f0; }
   }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-  header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); padding:14px 20px; display:flex; gap:16px; align-items:baseline; flex-wrap:wrap; }
+  header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); padding:14px 20px; display:flex; gap:16px; align-items:center; flex-wrap:wrap; z-index:5; }
   header h1 { font-size:16px; margin:0; font-weight:650; }
   nav a { text-decoration:none; color:var(--muted); margin-right:12px; }
   nav a.on { color:var(--ink); font-weight:650; }
@@ -30,12 +30,20 @@
   button { flex:1; padding:9px 10px; border:1px solid var(--line); border-radius:8px; font:inherit; font-weight:600; cursor:pointer; background:var(--bg); color:var(--ink); }
   button.ok { border-color:var(--ok); color:var(--ok); }
   button.no { border-color:var(--no); color:var(--no); }
+  button.go { border-color:var(--go); color:var(--go); }
   button:disabled { opacity:.5; cursor:default; }
+  header button { flex:0 0 auto; }
   .state { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
   .state.approved { color:var(--ok); }
   .state.rejected { color:var(--no); }
   .state.pending { color:var(--muted); }
   .empty { grid-column:1/-1; text-align:center; color:var(--muted); padding:60px 0; }
+  .pub-row { flex-wrap:wrap; }
+  .pub-btn { text-transform:capitalize; }
+  .pub-links { font-size:12px; color:var(--muted); display:flex; flex-direction:column; gap:2px; word-break:break-all; }
+  .pub-links a, .pub-out a { color:var(--go); }
+  .pub-link:empty { display:none; }
+  .pub-out { font-size:12px; color:var(--muted); white-space:pre-wrap; }
 </style>
 </head>
 <body>
@@ -46,6 +54,10 @@
       <a href="?filter={{f}}" class="{{ 'on' if f == filt else '' }}">{{f}} ({{ counts[f] }})</a>
     {% endfor %}
   </nav>
+  {% if counts.approved %}
+    <button class="go" id="pubAll">Publish {{ counts.approved }} approved
+      {%- if platforms %} → {{ platforms|join(', ') }}{% else %} (no platforms set){% endif %}</button>
+  {% endif %}
 </header>
 <main id="grid">
   {% if not videos %}<p class="empty">Nothing {{ filt }}.</p>{% endif %}
@@ -89,11 +101,90 @@
         <button class="ok" data-state="approved">Approve</button>
         <button class="no" data-state="rejected">Reject</button>
       </div>
+      {% if v.review.state == 'approved' and platforms %}
+      <div class="row pub-row">
+        {% for p in platforms %}
+          {% set st = (v.status or {}).get(p, 'pending') %}
+          {% set done = st in done_statuses %}
+          <button class="go pub-btn" data-platform="{{ p }}"
+                  data-done="{{ '1' if done else '' }}" {{ 'disabled' if done }}>
+            {{ '✓ ' if done }}{{ p }}
+          </button>
+        {% endfor %}
+      </div>
+      <div class="pub-links">
+        {% for p in platforms %}
+          {% set info = (v.published or {}).get(p) or {} %}
+          <span class="pub-link" data-platform="{{ p }}">
+            {%- if info.url %}{{ p }}: <a href="{{ info.url }}" target="_blank" rel="noreferrer">{{ info.url }}</a>
+            {%- elif (v.status or {}).get(p) in done_statuses %}{{ p }}: {{ (v.status or {}).get(p) }}{% endif -%}
+          </span>
+        {% endfor %}
+      </div>
+      <div class="pub-out"></div>
+      {% endif %}
     </div>
   </article>
   {% endfor %}
 </main>
 <script>
+function renderResults(el, rep) {
+  if (rep.error) { el.textContent = 'error: ' + rep.error; return; }
+  el.innerHTML = rep.results.map(r => {
+    const tail = r.ok ? (r.url ? ` <a href="${r.url}" target="_blank">${r.url}</a>` : ` ${r.status}`)
+                      : ` FAILED — ${r.error || ''}`;
+    return `${r.platform}:${tail}`;
+  }).join('\n');
+}
+
+const DONE = ['uploaded', 'published', 'already-published'];
+
+function lockButtons(card, locked) {
+  card.querySelectorAll('.pub-btn').forEach(b => {
+    b.disabled = locked || b.dataset.done === '1';
+  });
+}
+
+function setLink(card, platform, res) {
+  const span = card.querySelector('.pub-link[data-platform="' + platform + '"]');
+  if (!span) return;
+  if (res.url) {
+    span.innerHTML = platform + ': <a href="' + res.url + '" target="_blank" rel="noreferrer">' + res.url + '</a>';
+  } else if (DONE.includes(res.status)) {
+    span.textContent = platform + ': ' + res.status;
+  }
+}
+
+async function publishPlatform(card, btn) {
+  const stem = card.dataset.stem;
+  const platform = btn.dataset.platform;
+  const out = card.querySelector('.pub-out');
+  lockButtons(card, true);
+  out.textContent = 'publishing to ' + platform + '…';
+  try {
+    const r = await fetch('/api/publish/' + encodeURIComponent(stem), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform }),
+    });
+    const rep = await r.json();
+    const res = (rep.results || []).find(x => x.platform === platform);
+    if (rep.error) {
+      out.textContent = 'error: ' + rep.error;
+    } else if (res && res.ok) {
+      out.textContent = '';
+      setLink(card, platform, res);
+      if (DONE.includes(res.status)) { btn.dataset.done = '1'; btn.textContent = '✓ ' + platform; }
+    } else {
+      out.textContent = platform + ': FAILED — ' + ((res && res.error) || 'unknown');
+    }
+  } catch (e) {
+    out.textContent = 'request failed: ' + e.message;
+  } finally {
+    lockButtons(card, false);
+  }
+}
+
 async function decide(card, state) {
   const stem = card.dataset.stem;
   const captions = { youtube:{}, tiktok:{}, instagram:{} };
@@ -102,7 +193,7 @@ async function decide(card, state) {
     captions[plat][field] = t.value;
   });
   const note = card.querySelector('.note').value;
-  const btns = card.querySelectorAll('button');
+  const btns = card.querySelectorAll('button[data-state]');
   btns.forEach(b => b.disabled = true);
   try {
     const r = await fetch('/api/decision/' + encodeURIComponent(stem), {
@@ -114,15 +205,41 @@ async function decide(card, state) {
     const badge = card.querySelector('.state');
     badge.textContent = state;
     badge.className = 'state ' + state;
-    card.style.opacity = 0.55;
+    if (state === 'rejected') card.style.opacity = 0.55;
+    else location.reload();   // re-render so the Publish button appears
   } catch (e) {
     alert('failed: ' + e.message);
     btns.forEach(b => b.disabled = false);
   }
 }
+
 document.querySelectorAll('.card').forEach(card => {
   card.querySelectorAll('button[data-state]').forEach(b =>
     b.addEventListener('click', () => decide(card, b.dataset.state)));
+  card.querySelectorAll('.pub-btn').forEach(b =>
+    b.addEventListener('click', () => publishPlatform(card, b)));
+});
+
+const pubAll = document.getElementById('pubAll');
+if (pubAll) pubAll.addEventListener('click', async () => {
+  if (!confirm('Publish all approved videos now?')) return;
+  pubAll.disabled = true;
+  const orig = pubAll.textContent;
+  pubAll.textContent = 'publishing…';
+  try {
+    const r = await fetch('/api/publish-approved', { method: 'POST' });
+    const { reports } = await r.json();
+    reports.forEach(rep => {
+      const card = document.querySelector(`.card[data-stem="${rep.id}"] .pub-out`);
+      if (card) renderResults(card, rep);
+    });
+    pubAll.textContent = 'done — reloading…';
+    setTimeout(() => location.reload(), 1500);  // re-render so buttons grey out
+  } catch (e) {
+    pubAll.textContent = orig;
+    alert('failed: ' + e.message);
+    pubAll.disabled = false;
+  }
 });
 </script>
 </body>
