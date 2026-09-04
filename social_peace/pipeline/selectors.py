@@ -25,10 +25,20 @@ _KW_STOP = {
 
 
 def _keywords(cfg: Config, kind: str, name: str) -> set[str]:
-    """Loose descriptive tokens for a file: manifest tags + words in the filename."""
+    """Loose descriptive tokens for a file: manifest tags + label + filename words."""
     toks = set(_KW_RE.findall(name.lower()))
     toks |= {str(t).lower() for t in cfg.tags_for(kind, name)}
+    label = cfg.label_for(kind, name)
+    if label:
+        toks |= set(_KW_RE.findall(label.lower()))
     return toks - _KW_STOP
+
+
+def _pref_tokens(text: str | None) -> set[str]:
+    """Themed descriptive tokens from a free-text preference like 'ocean waves'."""
+    if not text:
+        return set()
+    return _themed(set(_KW_RE.findall(text.lower())) - _KW_STOP)
 
 
 # Broaden an audio keyword to the visual scenes that suit it, so a "rain" bed
@@ -120,22 +130,34 @@ def build_selection(
     duration: float | None = None,
     used_video: set[str] | None = None,
     used_audio: set[str] | None = None,
+    soft_used_video: set[str] | None = None,
+    soft_used_audio: set[str] | None = None,
     pin: dict | None = None,
     exclude_text: str | None = None,
+    prefer_video: str | None = None,
+    prefer_audio: str | None = None,
 ) -> Selection:
-    """`used_video` / `used_audio` are filenames already spent by other renders in
-    the batch (or by other non-rejected sidecars). Unspent assets are preferred so
-    a batch doesn't keep reaching for the same clip; clips are then ranked by how
-    well their descriptive tokens match the chosen audio (rain audio -> rainy clip).
+    """`used_video` / `used_audio` are filenames the pick must avoid where it can
+    (hard preference — top of the ranking). `soft_used_*` is a weaker "already
+    spent by an accepted/published render elsewhere" nudge, ranked below an
+    explicit `prefer_*` wish but above chance. Unspent assets win; used ones only
+    surface when the fresh pool runs out.
 
     `pin` = {"video": [names], "audio": [names], "text": str} forces those
     dimensions to exact values (used to re-render a video with only one thing
     changed). `exclude_text` drops one line from the overlay-text pool so a
-    text-only re-roll always differs from the original."""
+    text-only re-roll always differs from the original.
+
+    `prefer_video` / `prefer_audio` are free-text scene/sound wishes ("river
+    ambience") that strongly bias the unpinned dimension toward matching assets."""
     rng = random.Random(seed)
     used_video = set(used_video or ())
     used_audio = set(used_audio or ())
+    soft_used_video = set(soft_used_video or ()) - used_video
+    soft_used_audio = set(soft_used_audio or ()) - used_audio
     pin = pin or {}
+    pref_a_tok = _pref_tokens(prefer_audio)
+    pref_v_tok = _pref_tokens(prefer_video)
 
     # --- template ---
     if template_name:
@@ -169,9 +191,11 @@ def build_selection(
         a_ranked = sorted(
             audio_pool,
             key=lambda p: (
-                p.name in used_audio,                        # unused first
-                not cfg.favourite("audio", p.name),         # then favourites
-                -_tag_score(cfg, "audio", p, wanted_a),      # template tag pref
+                p.name in used_audio,                                        # unused first
+                -len(_keywords(cfg, "audio", p.name) & pref_a_tok),          # user's wish
+                not cfg.favourite("audio", p.name),                         # then favourites
+                p.name in soft_used_audio,                                   # avoid reusing accepted/published
+                -_tag_score(cfg, "audio", p, wanted_a),                     # template tag pref
                 rng.random(),
             ),
         )
@@ -214,7 +238,9 @@ def build_selection(
             video_pool,
             key=lambda p: (
                 p.name in used_video,                                     # unused first
+                -len(_keywords(cfg, "video", p.name) & pref_v_tok),       # user's wish
                 not cfg.favourite("video", p.name),                       # then favourites
+                p.name in soft_used_video,                                # avoid reusing accepted/published
                 -len(_keywords(cfg, "video", p.name) & audio_kw),         # match the audio
                 -_tag_score(cfg, "video", p, wanted_v),                   # template tag pref
                 rng.random(),
@@ -237,7 +263,7 @@ def build_selection(
         # segments — still preferring clips this batch hasn't used.
         by_len = sorted(
             (Clip(p, ffprobe_duration(p)) for p in candidates if p.suffix.lower() in VIDEO_EXTS),
-            key=lambda c: (c.path.name in used_video, -c.duration),
+            key=lambda c: (c.path.name in used_video, c.path.name in soft_used_video, -c.duration),
         )
         chosen = by_len[:n] if by_len else []
         if not chosen:

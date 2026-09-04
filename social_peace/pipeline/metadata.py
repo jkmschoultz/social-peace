@@ -131,6 +131,47 @@ def _write(sidecar_path: Path, md: dict) -> None:
     sidecar_path.write_text(json.dumps(md, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def regenerate_captions(cfg: Config, sidecar_path: Path) -> dict:
+    """Rebuild every platform caption for an existing render and save it. Uses the
+    LLM path when ANTHROPIC_API_KEY is set, else re-picks from the template lists
+    with a fresh (unseeded) RNG so it still differs from what's there."""
+    import random
+
+    md = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    m = cfg.raw["metadata"]
+    yt, tiktok, instagram = m["youtube"], m.get("tiktok", {}), m.get("instagram", {})
+    hashtags = list(m.get("hashtags", []))
+    hook = _hook_from_text(md.get("overlay_text", ""))
+
+    gen = generate_platform_captions(cfg, hook, md.get("template", ""))
+    if gen:
+        title, description = gen["youtube_title"], gen["youtube_description"]
+        tt_body, ig_body = gen["tiktok_caption"], gen["instagram_caption"]
+        source = "claude"
+    else:
+        rng = random.Random()
+        title = rng.choice(yt["title_templates"]).format(hook=hook)
+        description = yt["description"].strip()
+        tt_body = _caption_body(rng, tiktok, hook)
+        ig_body = _caption_body(rng, instagram, hook)
+        source = "template"
+
+    plats = md.setdefault("platforms", {})
+    plats.setdefault("youtube", {})["title"] = title[:100]
+    plats["youtube"]["description"] = _with_hashtags(description, hashtags)[:4900]
+    plats.setdefault("tiktok", {})["caption"] = _with_hashtags(tt_body, tiktok.get("hashtags", []))[:2200]
+    plats.setdefault("instagram", {})["caption"] = _with_hashtags(ig_body, instagram.get("hashtags", []))[:2200]
+    _write(sidecar_path, md)
+    return {
+        "source": source,
+        "platforms": {
+            "youtube": {"title": plats["youtube"]["title"], "description": plats["youtube"]["description"]},
+            "tiktok": {"caption": plats["tiktok"]["caption"]},
+            "instagram": {"caption": plats["instagram"]["caption"]},
+        },
+    }
+
+
 def mark_status(
     sidecar_path: Path,
     platform: str,

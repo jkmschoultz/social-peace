@@ -11,14 +11,21 @@
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-  header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); padding:14px 20px; display:flex; gap:14px; align-items:center; flex-wrap:wrap; z-index:5; }
+  header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); padding:12px 20px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; z-index:5; }
   header h1 { font-size:16px; margin:0; font-weight:650; }
   header a { color:var(--muted); text-decoration:none; }
+  header .left, header .right { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  header .right { margin-left:auto; }
   input, select { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); }
-  #fetchQ { width:200px; }
+  #fetchQ { flex:0 0 auto; width:170px; }
+  #genBtn, #fetchVidBtn, #fetchAudBtn, .tb { flex:0 0 auto; }
+  button.go { border:1px solid var(--go); border-radius:8px; background:var(--bg); color:var(--go); font:inherit; font-weight:600; padding:7px 12px; cursor:pointer; }
+  .tb { border:1px solid var(--go); border-radius:8px; background:var(--bg); color:var(--go); font:inherit; font-weight:600; padding:7px 12px; cursor:pointer; }
+  .jobstrip { flex:1 1 100%; font-size:12px; color:var(--muted); display:flex; gap:16px; flex-wrap:wrap; margin-top:2px; }
+  .job.running { color:var(--go); }
+  .job.error { color:var(--no); }
   main { max-width:1000px; margin:0 auto; padding:20px; }
   h2 { font-size:14px; font-weight:650; margin:24px 0 8px; }
-  #fetchMsg { flex:1 1 100%; font-size:12px; color:var(--muted); }
   .row { display:grid; grid-template-columns:auto auto 1fr auto; gap:12px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); }
   .row .prev { width:120px; }
   .row .prev video, .row .prev audio { width:120px; }
@@ -35,26 +42,49 @@
   button.rm { padding:7px 12px; border:1px solid var(--no); border-radius:8px; background:var(--bg); color:var(--no); font:inherit; font-weight:600; cursor:pointer; }
   button:disabled { opacity:.5; cursor:default; }
   .empty { color:var(--muted); padding:12px 0; }
+  .cap-h { margin-top:34px; border-top:1px solid var(--line); padding-top:22px; }
+  .cap-note { margin:-4px 0 6px; }
+  .cap-note code { background:var(--card); padding:1px 4px; border-radius:4px; }
+  h3.cap-list { font-size:13px; font-weight:650; margin:20px 0 4px; color:var(--muted); }
+  .crow { display:grid; grid-template-columns:56px 1fr auto; gap:12px; align-items:center; padding:7px 0; border-bottom:1px solid var(--line); }
+  .crow .ctext { white-space:pre-wrap; word-break:break-word; }
+  .crow .cnew { width:100%; }
+  .tag-base, .tag-bank { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; text-align:center; padding:2px 0; border-radius:5px; }
+  .tag-base { color:var(--muted); border:1px solid var(--line); }
+  .tag-bank { color:var(--go); border:1px solid var(--go); }
+  button.crm { padding:5px 10px; border:1px solid var(--no); border-radius:8px; background:var(--bg); color:var(--no); font:inherit; font-weight:600; cursor:pointer; }
+  button.cadd-btn { padding:5px 10px; border:1px solid var(--go); border-radius:8px; background:var(--bg); color:var(--go); font:inherit; font-weight:600; cursor:pointer; }
+  body.embed header { padding:10px 14px; }
+  body.embed header .right { margin-left:0; }
+  body.embed main { padding:14px; }
+  body.embed .row .prev { width:96px; }
+  body.embed .row .prev video, body.embed .row .prev audio { width:96px; }
 </style>
 </head>
-<body>
+<body class="{{ 'embed' if embed }}">
 <header>
-  <h1>assets</h1>
-  <a href="/">← back to review</a>
-  <label class="meta">show
-    <select id="assetFilter">
-      {% for f in filters %}<option value="{{f}}" {{ 'selected' if f == filt }}>{{f}}</option>{% endfor %}
-    </select>
-  </label>
-  <input id="fetchQ" type="text" placeholder="custom query (blank = rotate)">
-  <button id="fetchVid" class="rm" style="border-color:var(--go);color:var(--go)">⬇ clips</button>
-  <button id="fetchAud" class="rm" style="border-color:var(--go);color:var(--go)">⬇ audio</button>
-  <span id="fetchMsg"></span>
+  <div class="left">
+    {% if not embed %}<h1>assets</h1><a href="/">← back to review</a>{% endif %}
+  </div>
+  <div class="right">
+    <label class="meta">sort
+      <select id="assetSort">
+        {% for s in sorts %}<option value="{{s}}" {{ 'selected' if s == sort }}>{{s}}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="meta">show
+      <select id="assetFilter">
+        {% for f in filters %}<option value="{{f}}" {{ 'selected' if f == filt }}>{{ f.replace('-', ' ') }}</option>{% endfor %}
+      </select>
+    </label>
+    {% if not embed %}{% include "_toolbar.html" %}{% endif %}
+  </div>
 </header>
 <main>
-  {% for kind, rows, total in [('video', video, total_video), ('audio', audio, total_audio)] %}
-  <h2>{{ kind }} — <span id="count-{{ kind }}">{{ rows|length }}</span>{% if filt != 'all' %} of {{ total }}{% endif %} in the pool</h2>
-  {% if not rows %}<p class="empty">none{% if filt != 'all' %} match “{{ filt }}”{% endif %}</p>{% endif %}
+  {% set counted = filt not in ('all', 'video-only', 'audio-only') %}
+  {% for kind, rows, total in sections %}
+  <h2>{{ kind }} — <span id="count-{{ kind }}">{{ rows|length }}</span>{% if counted %} of {{ total }}{% endif %} in the pool</h2>
+  {% if not rows %}<p class="empty">none{% if counted %} match “{{ filt }}”{% endif %}</p>{% endif %}
   {% for r in rows %}
   <div class="row" data-kind="{{ kind }}" data-name="{{ r.name }}">
     <button class="star {{ 'on' if r.favourite }}" title="favourite">{{ '★' if r.favourite else '☆' }}</button>
@@ -72,7 +102,7 @@
       </div>
       {% if r.label %}<div class="fname">{{ r.name }}</div>{% endif %}
       <div class="meta">
-        {{ (r.size / 1048576)|round(1) }} MB{% if r.duration %} · {{ r.duration|round|int }}s{% endif %}
+        {{ (r.size / 1048576)|round(1) }} MB{% if r.duration %} · {{ r.duration }}{% endif %}
         {%- if r.tags %} · {{ r.tags|join(', ') }}{% endif %}
         {%- if r.states %} · <span class="used">in {{ r.states|join(', ') }}</span>{% endif %}
       </div>
@@ -86,12 +116,49 @@
   </div>
   {% endfor %}
   {% endfor %}
+
+  {% if caption_sections %}
+  <h2 class="cap-h">caption &amp; overlay templates</h2>
+  <p class="meta cap-note">
+    Template lines the seeded picker draws from. <span class="tag-bank">bank</span> lines
+    (added by “⬇ captions” or below) live in <code>config/caption_bank.yaml</code> and can be
+    removed here; <span class="tag-base">base</span> lines come from <code>config.yaml</code> —
+    edit that file to change them. Use <code>{hook}</code> where the video’s overlay text goes.
+  </p>
+  {% for sec in caption_sections %}
+  <h3 class="cap-list" id="cap-{{ sec.key }}">{{ sec.title }} —
+    <span id="capcount-{{ sec.key }}">{{ sec.rows|length }}</span>
+    <span class="meta">({{ sec.n_bank }} removable)</span>
+  </h3>
+  {% for r in sec.rows %}
+  <div class="crow" data-key="{{ sec.key }}" data-origin="{{ r.origin }}">
+    <span class="tag-{{ r.origin }}">{{ r.origin }}</span>
+    <span class="ctext">{{ r.text }}</span>
+    {% if r.origin == 'bank' %}<button class="crm">remove</button>{% else %}<span></span>{% endif %}
+  </div>
+  {% endfor %}
+  <div class="crow cadd" data-key="{{ sec.key }}">
+    <span class="tag-bank">＋</span>
+    <input class="cnew" type="text" placeholder="add a line to {{ sec.title }}…">
+    <button class="cadd-btn">add</button>
+  </div>
+  {% endfor %}
+  {% endif %}
 </main>
 <script>
+const EMBED = {{ 'true' if embed else 'false' }};
+function assetNav(next) {
+  const u = new URL('/assets', location.origin);
+  const f = document.getElementById('assetFilter'), s = document.getElementById('assetSort');
+  u.searchParams.set('filter', (next.filter != null ? next.filter : (f ? f.value : 'all')));
+  u.searchParams.set('sort', (next.sort != null ? next.sort : (s ? s.value : 'favourite')));
+  if (EMBED) u.searchParams.set('embed', '1');
+  location.href = u.toString();
+}
 const assetFilter = document.getElementById('assetFilter');
-if (assetFilter) assetFilter.addEventListener('change', () => {
-  location.href = '/assets?filter=' + encodeURIComponent(assetFilter.value);
-});
+if (assetFilter) assetFilter.addEventListener('change', () => assetNav({ filter: assetFilter.value }));
+const assetSort = document.getElementById('assetSort');
+if (assetSort) assetSort.addEventListener('change', () => assetNav({ sort: assetSort.value }));
 
 async function apiAsset(kind, name, action, body) {
   const r = await fetch('/api/asset/' + kind + '/' + encodeURIComponent(name) + '/' + action, {
@@ -104,7 +171,7 @@ async function apiAsset(kind, name, action, body) {
   return j;
 }
 
-document.querySelectorAll('.row').forEach(row => {
+function bindRow(row) {
   const { kind, name } = row.dataset;
 
   row.querySelector('.star').addEventListener('click', async (e) => {
@@ -141,42 +208,93 @@ document.querySelectorAll('.row').forEach(row => {
       document.getElementById('count-' + kind).textContent = j.pool_size;
     } catch (err) { btn.disabled = false; alert('failed: ' + err.message); }
   });
-});
-
-async function pollJob(id) {
-  for (;;) {
-    await new Promise(r => setTimeout(r, 2500));
-    const r = await fetch('/api/jobs/' + id);
-    if (!r.ok) throw new Error('job not found');
-    const j = await r.json();
-    if (j.state === 'done') return j.result;
-    if (j.state === 'error') throw new Error(j.error || 'job failed');
-  }
 }
+function bindRows() { document.querySelectorAll('.row').forEach(bindRow); }
+bindRows();
 
-const fetchMsg = document.getElementById('fetchMsg');
-async function runFetch(btn, kind) {
-  const q = document.getElementById('fetchQ').value.trim();
-  document.querySelectorAll('#fetchVid,#fetchAud').forEach(b => b.disabled = true);
-  fetchMsg.textContent = 'fetching ' + kind + (q ? ' “' + q + '”' : '') + '… (~1-2 min)';
-  try {
-    const r = await fetch('/api/fetch/' + kind, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: q }),
+async function apiCaption(key, action, text) {
+  const r = await fetch('/api/caption/' + encodeURIComponent(key) + '/' + action, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  return j;
+}
+function capCount(key, n) {
+  const el = document.getElementById('capcount-' + key);
+  if (el && n != null) el.textContent = n;
+}
+function bindCaptionRow(row) {
+  const key = row.dataset.key;
+  const rm = row.querySelector('.crm');
+  if (rm && !rm._bound) {
+    rm._bound = true;
+    rm.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const text = row.querySelector('.ctext').textContent;
+      if (!confirm('Remove this line from the caption bank?\n\n' + text)) return;
+      btn.disabled = true;
+      try {
+        const j = await apiCaption(key, 'delete', text);
+        row.remove();
+        capCount(key, j.total);
+      } catch (err) { btn.disabled = false; alert('failed: ' + err.message); }
     });
-    const { job_id, error } = await r.json();
-    if (error) throw new Error(error);
-    const res = await pollJob(job_id);
-    fetchMsg.textContent = kind + ': +' + res.fetched + ' fetched, +' + res.promoted +
-      ' added → ' + res.pool_size + ' in the pool  [' + (res.notes || []).join('; ') + ']  — reloading…';
-    setTimeout(() => location.reload(), 1500);
-  } catch (e) {
-    fetchMsg.textContent = kind + ' fetch failed: ' + e.message;
-    document.querySelectorAll('#fetchVid,#fetchAud').forEach(b => b.disabled = false);
+  }
+  const add = row.querySelector('.cadd-btn');
+  if (add && !add._bound) {
+    add._bound = true;
+    const input = row.querySelector('.cnew');
+    const submit = async () => {
+      const text = input.value.trim();
+      if (!text) return;
+      add.disabled = true;
+      try {
+        const j = await apiCaption(key, 'add', text);
+        if (j.added === 0) { alert('that line is already in the pool'); }
+        else {
+          const div = document.createElement('div');
+          div.className = 'crow'; div.dataset.key = key; div.dataset.origin = 'bank';
+          div.innerHTML = '<span class="tag-bank">bank</span><span class="ctext"></span><button class="crm">remove</button>';
+          div.querySelector('.ctext').textContent = text;
+          row.parentNode.insertBefore(div, row);
+          bindCaptionRow(div);
+          input.value = '';
+          capCount(key, j.total);
+        }
+      } catch (err) { alert('failed: ' + err.message); }
+      finally { add.disabled = false; }
+    };
+    add.addEventListener('click', submit);
+    input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); submit(); } });
   }
 }
-document.getElementById('fetchVid').addEventListener('click', e => runFetch(e.currentTarget, 'video'));
-document.getElementById('fetchAud').addEventListener('click', e => runFetch(e.currentTarget, 'audio'));
+function bindCaptionRows() { document.querySelectorAll('.crow').forEach(bindCaptionRow); }
+bindCaptionRows();
+
+// pull a fresh list in place when a fetch job finishes (no full reload)
+let _busy = 0;
+async function spRefreshAssets() {
+  if (Date.now() - _busy < 1500) return;
+  _busy = Date.now();
+  try {
+    const html = await (await fetch(location.href)).text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const fresh = doc.querySelector('main'), cur = document.querySelector('main');
+    if (fresh && cur) {
+      const y = window.scrollY;
+      cur.replaceWith(fresh);
+      bindRows();
+      bindCaptionRows();
+      window.scrollTo(0, y);
+    }
+  } catch (e) { /* leave as-is */ }
+}
+window.spOnJobDone = function (job) {
+  if ((job.kind || '').indexOf('fetch') === 0) spRefreshAssets();
+};
+/* fetch clips / audio + generate + the job strip all live in _toolbar.html */
 </script>
 </body>
 </html>

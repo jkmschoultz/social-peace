@@ -45,12 +45,26 @@ python -m social_peace pipeline --no-fetch     # just render from the current as
 #    published tab). Header buttons: "+ Generate new content" (render another
 #    batch), "Fetch clips" / "Fetch audio" (top up the asset library for future
 #    runs). Every card has "↻ clips / ↻ audio / ↻ text" to re-render it with one
-#    thing swapped. Sort dropdown (newest / oldest / seed / template / status).
+#    thing swapped, with a "prefer …" box to bias the re-roll toward assets
+#    matching a scene/sound wish ("river ambience"); the re-roll also leans away
+#    from assets already used by accepted/published renders (below "prefer" in
+#    priority). Sort dropdown (newest / oldest / seed / template / status).
+#    Header right side: sort · custom-query box · fetch clips · fetch audio ·
+#    fetch captions · Generate. "⬇ captions" asks Claude for a fresh batch of
+#    overlay / title / caption template lines and appends them to
+#    config/caption_bank.yaml, growing the pool future renders pick from (needs
+#    ANTHROPIC_API_KEY — there is no non-LLM source for new caption copy).
+#    A job strip under the header shows any running / just-finished
+#    fetch / generate / publish job and persists as you navigate between pages;
+#    when a generate / variant / fetch finishes it refreshes the grid or asset
+#    list in place (no full reload — playing videos and scroll are kept).
 #    The "assets" nav link lists every clip / bed (source, licence, size, which
 #    render states use it): ★ favourite (favourites get preferred in selection),
-#    ✎ rename (display label, kept in the manifest), remove, a per-usage /
-#    favourite filter, and a custom-query fetch bar. The rejected tab has an
-#    "Empty rejected" button.
+#    ✎ rename (display label, kept in the manifest), remove, sort (favourite /
+#    name / size / duration / newest), a show filter (usage, favourite, or
+#    video-only / audio-only), and a custom-query fetch bar. Open it as its own
+#    page ("assets ↗") or as a right-side drawer ("assets ▸") without leaving the
+#    grid. The rejected tab has an "Empty rejected" button.
 python -m social_peace review                  # http://127.0.0.1:8756
 
 # reclaim output/ space — drop rejected renders (cron this; the review server
@@ -60,6 +74,11 @@ python -m social_peace prune --all              # every rejected render
 
 # re-render one video with a single dimension re-picked (CLI equivalent of ↻)
 python -m social_peace variant <stem> --change audio
+
+# grow the caption pool: Claude writes new overlay / title / caption template
+# lines into config/caption_bank.yaml (merged over config.yaml at load time)
+python -m social_peace captions-bank                # ~6 new lines per list
+python -m social_peace captions-bank --per-list 10
 
 # 3. or publish from the CLI: everything approved and not already posted
 python -m social_peace publish-approved
@@ -105,6 +124,21 @@ either, or on any API error, it falls back to the old behaviour of picking one o
 the template lines at random. All editable in the review UI regardless of which
 path produced them. The on-screen overlay text burned into the video is
 unaffected — still the seeded `overlay_text` list in `config.yaml`.
+
+**Caption bank:** the `⬇ captions` header button and `captions-bank` command ask
+Claude for brand-new *template* lines (overlay text, YouTube title, TikTok /
+Instagram captions) and append them to `config/caption_bank.yaml`. That file is
+merged on top of the matching lists in `config.yaml` every time the config
+loads, so the template pool the seeded picker (and the per-render "style
+reference" above) draws from keeps growing without editing `config.yaml` by
+hand. Needs `ANTHROPIC_API_KEY` — unlike media there is no non-LLM source for
+new caption copy, so the button / command just reports an error without it.
+
+The **assets page** has a "caption & overlay templates" section (and a
+`captions only` show-filter) listing every line in all four lists, tagged `bank`
+(removable, lives in `caption_bank.yaml`) or `base` (from `config.yaml`, edit
+that file to change). Each list has an inline box to add a line by hand — no API
+key needed for manual adds/removes.
 
 ## Setup (Windows)
 

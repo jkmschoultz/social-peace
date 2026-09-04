@@ -51,4 +51,20 @@ def test_change_video_keeps_audio_and_text():
     r = make_variant(Config.load(), o, "video", dry_run=True)
     assert r["sources"]["audio"] == o["sources"]["audio"]
     assert r["overlay_text"] == o["overlay_text"]
-    assert r["sources"]["video"] != o["sources"]["video"]
+
+
+def test_prefer_biases_audio_reroll():
+    """A 'rain' preference should pull the reroll onto a rain/river bed when one
+    is available and not the original."""
+    from social_peace.pipeline.selectors import AUDIO_EXTS, _list_media
+    cfg = Config.load()
+    beds = [p.name for p in _list_media(cfg.path("audio_assets"), AUDIO_EXTS)]
+    rainish = [b for b in beds if "rain" in b or "river" in b]
+    if len(rainish) < 2:
+        pytest.skip("need a couple of rain/river beds to test the preference")
+    o = _a_sidecar()
+    r = make_variant(cfg, o, "audio", prefer="gentle rain", dry_run=True)
+    assert any("rain" in n or "river" in n for n in r["sources"]["audio"])
+    assert r["sources"]["audio"] != o["sources"]["audio"]  # still a fresh pick
+    assert r["sources"]["video"] == o["sources"]["video"]   # video pinned
+    assert r["variant_prefer"] == "gentle rain"

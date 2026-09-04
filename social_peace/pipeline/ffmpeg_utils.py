@@ -26,13 +26,13 @@ def _resolve_bin(name: str) -> str:
     return found
 
 
-def ffprobe_duration(path: str | Path) -> float:
+def ffprobe_duration(path: str | Path, *, timeout: float = 15.0) -> float:
     cmd = [
         _resolve_bin("ffprobe"), "-v", "error",
         "-show_entries", "format=duration",
         "-of", "json", str(path),
     ]
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+    out = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=timeout).stdout
     return float(json.loads(out)["format"]["duration"])
 
 

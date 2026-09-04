@@ -1,58 +1,9 @@
 import json
-import time
 
 import pytest
 import yaml
 
-from social_peace.config import Config
-from social_peace.review.app import create_app
-
-
-def _wait_job(client, job_id, tries=60):
-    for _ in range(tries):
-        j = client.get("/api/jobs/" + job_id).get_json()
-        if j["state"] != "running":
-            return j
-        time.sleep(0.1)
-    raise AssertionError("job did not finish")
-
-
-@pytest.fixture
-def client(tmp_path, monkeypatch):
-    cfg = Config.load()
-    out = tmp_path / "output"
-    logs = tmp_path / "logs"
-    vids = tmp_path / "video"
-    auds = tmp_path / "audio"
-    for d in (out, logs, vids, auds):
-        d.mkdir()
-    monkeypatch.setitem(cfg.raw["paths"], "output", str(out))
-    monkeypatch.setitem(cfg.raw["paths"], "logs", str(logs))
-    # Config.path resolves against cfg.root; use absolute overrides instead.
-    _paths = {"output": out, "logs": logs, "video_assets": vids, "audio_assets": auds}
-    monkeypatch.setattr(cfg, "path", lambda k: _paths[k])
-    monkeypatch.setattr(cfg, "root", tmp_path)
-    monkeypatch.setattr(cfg, "manifest", {})
-
-    side = out / "20260101-000000_warm-dawn_1.json"
-    side.write_text(json.dumps({
-        "id": "20260101-000000_warm-dawn_1",
-        "template": "warm-dawn", "seed": 1, "duration_seconds": 40,
-        "overlay_text": "Breathe.",
-        "source_urls": {"video": {"a.mp4": None}, "audio": {"b.mp3": None}},
-        "review": {"state": "pending", "decided_utc": None, "note": ""},
-        "platforms": {
-            "youtube": {"title": "T", "description": "D", "tags": [], "categoryId": "22",
-                        "privacyStatus": "private", "madeForKids": False},
-            "tiktok": {"caption": "tt", "hashtags": [], "privacy": "SELF_ONLY"},
-            "instagram": {"caption": "ig", "hashtags": []},
-        },
-        "status": {"youtube": "pending", "tiktok": "skipped", "instagram": "skipped"},
-    }), encoding="utf-8")
-
-    app = create_app(cfg)
-    app.config.update(TESTING=True)
-    return app.test_client(), side, logs
+from conftest import _wait_job  # shared helper; `client` fixture auto-resolves
 
 
 def test_index_and_filters(client):
@@ -138,9 +89,9 @@ def test_publish_endpoint_runs_available_platforms(client, monkeypatch):
 
     monkeypatch.setattr(runner, "publish_one", fake_publish_one)
 
-    r = c.post("/api/publish/20260101-000000_warm-dawn_1")
-    body = r.get_json()
-    assert r.status_code == 200
+    j = _wait_job(c, c.post("/api/publish/20260101-000000_warm-dawn_1").get_json()["job_id"])
+    body = j["result"]
+    assert j["state"] == "done"
     assert calls == ["youtube", "instagram"]  # config target_platforms
     assert {res["platform"] for res in body["results"]} == {"youtube", "instagram"}
     assert all(res["ok"] and res["status"] == "uploaded" for res in body["results"])
@@ -167,9 +118,9 @@ def test_publish_endpoint_single_platform(client, monkeypatch):
 
     monkeypatch.setattr(runner, "publish_one", fake)
 
-    r = c.post("/api/publish/20260101-000000_warm-dawn_1", json={"platform": "instagram"})
-    assert r.status_code == 200
-    assert calls == ["instagram"]
+    j = _wait_job(c, c.post("/api/publish/20260101-000000_warm-dawn_1",
+                            json={"platform": "instagram"}).get_json()["job_id"])
+    assert j["state"] == "done" and calls == ["instagram"]
     assert json.loads(side.read_text())["status"]["instagram"] == "uploaded"
 
 
@@ -183,8 +134,8 @@ def test_publish_endpoint_rejects_unknown_platform(client):
 def test_publish_endpoint_refuses_unapproved(client):
     c, side, _ = client
     side.with_suffix(".mp4").write_bytes(b"x")
-    r = c.post("/api/publish/20260101-000000_warm-dawn_1")
-    assert r.get_json()["error"] == "not approved"
+    j = _wait_job(c, c.post("/api/publish/20260101-000000_warm-dawn_1").get_json()["job_id"])
+    assert j["result"]["error"] == "not approved"
 
 
 def test_publish_endpoint_bad_stem_404(client):
@@ -287,6 +238,34 @@ def test_assets_favourite_filter(client, tmp_path):
     assert "fav.mp4" in html and "plain.mp4" not in html
 
 
+def test_assets_sort_and_kind_only(client, tmp_path):
+    c, *_ = client
+    (tmp_path / "video" / "v1.mp4").write_bytes(b"x" * 100)
+    (tmp_path / "audio" / "a1.mp3").write_bytes(b"y" * 10)
+    for s in ("favourite", "name", "size", "duration", "newest", "bogus"):
+        assert c.get("/assets?sort=" + s).status_code == 200
+    vonly = c.get("/assets?filter=video-only").get_data(as_text=True)
+    assert "v1.mp4" in vonly and "a1.mp3" not in vonly
+    aonly = c.get("/assets?filter=audio-only").get_data(as_text=True)
+    assert "a1.mp3" in aonly and "v1.mp4" not in aonly
+
+
+def test_variant_endpoint_accepts_prefer(client, monkeypatch):
+    c, *_ = client
+    seen = {}
+    from social_peace.pipeline import variant as vmod
+    monkeypatch.setattr(
+        vmod, "make_variant",
+        lambda cfg, orig, change, **kw: seen.update(kw) or {
+            "id": "X", "template": orig["template"], "seed": orig["seed"],
+            "sources": {"video": [], "audio": []}, "duration": 5,
+        },
+    )
+    j = _wait_job(c, c.post("/api/variant/20260101-000000_warm-dawn_1",
+                            json={"change": "audio", "prefer": "river ambience"}).get_json()["job_id"])
+    assert j["state"] == "done" and seen.get("prefer") == "river ambience"
+
+
 def test_assets_page_lists_files(client, tmp_path):
     c, *_ = client
     (tmp_path / "video" / "clip-one.mp4").write_bytes(b"x" * 2048)
@@ -330,7 +309,16 @@ def test_publish_all_approved_endpoint(client, monkeypatch):
     monkeypatch.setattr(runner, "publish_one",
                         lambda cfg, vp, p: PublishResult(p, ok=True, status="uploaded"))
 
-    r = c.post("/api/publish-approved")
-    reports = r.get_json()["reports"]
+    j = _wait_job(c, c.post("/api/publish-approved").get_json()["job_id"])
+    reports = j["result"]["reports"]
     assert len(reports) == 1 and reports[0]["id"] == "20260101-000000_warm-dawn_1"
     assert reports[0]["results"][0]["ok"] is True
+
+
+def test_jobs_list_endpoint(client):
+    c, *_ = client
+    import social_peace.review.app as appmod
+    jid = appmod._start_job("test", lambda: {"ok": 1}, "a test job")
+    _wait_job(c, jid)
+    listing = c.get("/api/jobs").get_json()["jobs"]
+    assert any(x["id"] == jid and x["label"] == "a test job" for x in listing)

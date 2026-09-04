@@ -10,7 +10,9 @@ import json
 import logging
 import re
 import threading
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, render_template, request, send_from_directory
@@ -34,16 +36,31 @@ _STEM_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _FILTERS = ("pending", "approved", "published", "rejected", "all")
 _TABS = ("pending", "approved", "published", "rejected")
 
-# in-memory registry for slow render jobs (generate / variant). Per-process; the
-# renders land in output/ regardless, so a lost job just means no status polling.
+# in-memory registry for slow ops (generate / variant / fetch / publish). Shared
+# across every page + browser tab in this server process, so a status survives
+# navigating around. Finished jobs linger _JOB_TTL seconds for late page loads.
 _JOBS: dict[str, dict] = {}
 _JOBS_LOCK = threading.Lock()
+_JOB_TTL = 90.0
 
 
-def _start_job(kind: str, work) -> str:
+def _prune_jobs() -> None:
+    now = time.time()
+    with _JOBS_LOCK:
+        for jid in [
+            j for j, v in _JOBS.items()
+            if v.get("finished_at") and now - v["finished_at"] > _JOB_TTL
+        ]:
+            _JOBS.pop(jid, None)
+
+
+def _start_job(kind: str, work, label: str = "") -> str:
     job_id = uuid.uuid4().hex[:12]
     with _JOBS_LOCK:
-        _JOBS[job_id] = {"id": job_id, "kind": kind, "state": "running"}
+        _JOBS[job_id] = {
+            "id": job_id, "kind": kind, "label": label or kind,
+            "state": "running", "started_at": time.time(),
+        }
 
     def _run():
         try:
@@ -52,6 +69,7 @@ def _start_job(kind: str, work) -> str:
         except Exception as exc:  # noqa: BLE001
             log.exception("job %s (%s) failed", job_id, kind)
             upd = {"state": "error", "error": str(exc)}
+        upd["finished_at"] = time.time()
         with _JOBS_LOCK:
             _JOBS[job_id].update(upd)
 
@@ -82,23 +100,62 @@ def _duration(path: Path) -> float | None:
         return None
 
 
-def _asset_rows(cfg: Config, kind: str, usage: dict[str, set], filt: str = "all") -> list[dict]:
+def _fmt_dur(sec: float | None) -> str | None:
+    if not sec:
+        return None
+    sec = round(sec)
+    return f"{sec}s" if sec < 60 else f"{sec // 60}:{sec % 60:02d}"
+
+
+def _warm_durations(paths: list[Path]) -> None:
+    """Probe uncached durations in parallel so the assets page renders fast."""
+    cold = [p for p in paths if str(p) not in _DUR_CACHE
+            or _DUR_CACHE[str(p)][0] != p.stat().st_mtime]
+    if not cold:
+        return
+    with ThreadPoolExecutor(max_workers=min(8, len(cold))) as ex:
+        list(ex.map(_duration, cold))
+
+
+_ASSET_SORTS = ("favourite", "name", "size", "duration", "newest")
+
+
+def _sort_assets(rows: list[dict], sort: str) -> list[dict]:
+    if sort == "name":
+        return sorted(rows, key=lambda r: (r["label"] or r["name"]).lower())
+    if sort == "size":
+        return sorted(rows, key=lambda r: -r["size"])
+    if sort == "duration":
+        return sorted(rows, key=lambda r: -(r["dur_s"] or 0))
+    if sort == "newest":
+        return sorted(rows, key=lambda r: -r["mtime"])
+    return sorted(rows, key=lambda r: (not r["favourite"], (r["label"] or r["name"]).lower()))
+
+
+def _asset_rows(
+    cfg: Config, kind: str, usage: dict[str, set], filt: str = "all", sort: str = "favourite"
+) -> list[dict]:
     folder = cfg.path("video_assets" if kind == "video" else "audio_assets")
     exts = VIDEO_EXTS if kind == "video" else AUDIO_EXTS
     man = cfg.manifest.get(kind) or {}
+    all_paths = _list_media(folder, exts)
+    _warm_durations(all_paths)
     rows = []
-    for p in _list_media(folder, exts):
+    for p in all_paths:
         states = usage.get(p.name, set())
         m = man.get(p.name) or {}
         fav = bool(m.get("favourite"))
         if not _asset_matches(filt, states, fav):
             continue
+        st = p.stat()
         rows.append({
             "name": p.name,
             "label": m.get("label") or None,
             "favourite": fav,
-            "size": p.stat().st_size,
-            "duration": _duration(p),
+            "size": st.st_size,
+            "mtime": st.st_mtime,
+            "dur_s": _duration(p),
+            "duration": _fmt_dur(_duration(p)),
             "source": m.get("source"),
             "license": m.get("license"),
             "url": m.get("url"),
@@ -106,11 +163,10 @@ def _asset_rows(cfg: Config, kind: str, usage: dict[str, set], filt: str = "all"
             "used": bool(states),
             "states": sorted(states),
         })
-    rows.sort(key=lambda r: (not r["favourite"], (r["label"] or r["name"]).lower()))
-    return rows
+    return _sort_assets(rows, sort)
 
 
-def _load_all(output_dir: Path) -> list[dict]:
+def _load_all(cfg: Config, output_dir: Path) -> list[dict]:
     rows: list[dict] = []
     for side in sorted(output_dir.glob("*.json"), reverse=True):
         try:
@@ -122,7 +178,17 @@ def _load_all(output_dir: Path) -> list[dict]:
         md.setdefault("review", {"state": "pending", "decided_utc": None, "note": ""})
         md.setdefault("status", {})
         md.setdefault("published", {})
-        md.setdefault("source_urls", {"video": {}, "audio": {}})
+        # re-resolve source links from the current manifest — sidecars freeze these
+        # at build time, so a render made before a manifest URL was added would
+        # otherwise show "(no link)" forever.
+        frozen = md.get("source_urls") or {}
+        md["source_urls"] = {
+            kind: {
+                n: cfg.source_for(kind, n) or (frozen.get(kind) or {}).get(n)
+                for n in md.get("sources", {}).get(kind, [])
+            }
+            for kind in ("video", "audio")
+        }
         md["_state"] = _effective_state(md)
         plats = md.setdefault("platforms", {})
         plats.setdefault("youtube", {"title": "", "description": ""})
@@ -187,7 +253,31 @@ def _asset_usage(cfg: Config) -> dict[str, dict[str, set]]:
     return out
 
 
-_ASSET_FILTERS = ("all", "favourite", "unused", "used", "pending", "approved", "published", "rejected")
+_ASSET_FILTERS = (
+    "all", "video-only", "audio-only", "captions-only", "favourite", "unused", "used",
+    "pending", "approved", "published", "rejected",
+)
+
+
+def _caption_sections(cfg: Config) -> list[dict]:
+    """One block per caption/overlay template list — its lines tagged 'base'
+    (from config.yaml, kept) or 'bank' (from caption_bank.yaml, removable here)."""
+    from social_peace.config import _BANK_MAP
+    from social_peace.pipeline.captions import _config_list, read_caption_bank
+
+    bank = read_caption_bank(cfg)
+    out = []
+    for key in _BANK_MAP:
+        bank_lines = set(bank.get(key, []))
+        rows = [{"text": ln, "origin": "bank" if ln in bank_lines else "base"}
+                for ln in _config_list(cfg, key)]
+        out.append({
+            "key": key,
+            "title": key.replace("_", " "),
+            "rows": rows,
+            "n_bank": sum(1 for r in rows if r["origin"] == "bank"),
+        })
+    return out
 
 
 def _asset_matches(filt: str, states: set, favourite: bool = False) -> bool:
@@ -215,7 +305,7 @@ def create_app(cfg: Config) -> Flask:
         sort = request.args.get("sort", "newest")
         if sort not in _SORTS:
             sort = "newest"
-        rows = _load_all(output_dir)
+        rows = _load_all(cfg, output_dir)
         counts = {s: len(_filtered(rows, s)) for s in _TABS}
         counts["all"] = len(rows)
         return render_template(
@@ -234,15 +324,31 @@ def create_app(cfg: Config) -> Flask:
         filt = request.args.get("filter", "all")
         if filt not in _ASSET_FILTERS:
             filt = "all"
+        sort = request.args.get("sort", "favourite")
+        if sort not in _ASSET_SORTS:
+            sort = "favourite"
+        only = {"video-only": "video", "audio-only": "audio"}.get(filt)
+        caps_only = filt == "captions-only"
+        match = "all" if (only or caps_only) else filt
         usage = _asset_usage(cfg)
+        totals = {
+            "video": len(_list_media(cfg.path("video_assets"), VIDEO_EXTS)),
+            "audio": len(_list_media(cfg.path("audio_assets"), AUDIO_EXTS)),
+        }
+        sections = [] if caps_only else [
+            (k, _asset_rows(cfg, k, usage[k], match, sort), totals[k])
+            for k in ("video", "audio")
+            if only in (None, k)
+        ]
         return render_template(
             "assets.html",
-            video=_asset_rows(cfg, "video", usage["video"], filt),
-            audio=_asset_rows(cfg, "audio", usage["audio"], filt),
-            total_video=len(_list_media(cfg.path("video_assets"), VIDEO_EXTS)),
-            total_audio=len(_list_media(cfg.path("audio_assets"), AUDIO_EXTS)),
+            sections=sections,
+            caption_sections=_caption_sections(cfg) if filt in ("all", "captions-only") else [],
             filt=filt,
             filters=list(_ASSET_FILTERS),
+            sort=sort,
+            sorts=list(_ASSET_SORTS),
+            embed=bool(request.args.get("embed")),
         )
 
     @app.get("/asset-media/<kind>/<name>")
@@ -294,12 +400,34 @@ def create_app(cfg: Config) -> Flask:
         exts = VIDEO_EXTS if kind == "video" else AUDIO_EXTS
         return jsonify(ok=True, pool_size=len(_list_media(folder, exts)))
 
+    @app.post("/api/caption/<key>/<action>")
+    def caption_line(key: str, action: str):
+        from social_peace.pipeline.captions import (
+            _BANK_KEYS,
+            add_caption_bank_line,
+            remove_caption_bank_line,
+        )
+        if key not in _BANK_KEYS:
+            return jsonify(error=f"unknown caption list {key!r}"), 404
+        if action not in ("add", "delete"):
+            abort(404)
+        text = (request.get_json(silent=True) or {}).get("text", "")
+        if not str(text).strip():
+            return jsonify(error="send a non-empty 'text'"), 400
+        try:
+            if action == "add":
+                return jsonify(add_caption_bank_line(cfg, key, str(text)))
+            res = remove_caption_bank_line(cfg, key, str(text))
+            return (jsonify(res), 200) if res.get("ok") else (jsonify(res), 400)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+
     @app.get("/api/videos")
     def api_videos():
         filt = request.args.get("filter", "pending")
         if filt not in _FILTERS:
             filt = "pending"
-        return jsonify(_filtered(_load_all(output_dir), filt))
+        return jsonify(_filtered(_load_all(cfg, output_dir), filt))
 
     @app.get("/media/<stem>.mp4")
     def media(stem: str):
@@ -330,6 +458,15 @@ def create_app(cfg: Config) -> Flask:
         )
         return jsonify(ok=True, review=md["review"])
 
+    @app.post("/api/captions/<stem>")
+    def api_captions(stem: str):
+        stem = _safe_stem(stem)
+        sidecar = output_dir / f"{stem}.json"
+        if not sidecar.is_file():
+            abort(404)
+        from social_peace.pipeline.metadata import regenerate_captions
+        return jsonify(regenerate_captions(cfg, sidecar))
+
     @app.post("/api/publish/<stem>")
     def publish_video(stem: str):
         stem = _safe_stem(stem)
@@ -337,15 +474,22 @@ def create_app(cfg: Config) -> Flask:
         if not sidecar.is_file():
             abort(404)
         platform = (request.get_json(silent=True) or {}).get("platform")
-        if platform:
-            if platform not in available_platforms(cfg):
-                return jsonify(error=f"{platform!r} is not in project.target_platforms"), 400
-            return jsonify(publish_sidecar(cfg, sidecar, platforms=[platform]))
-        return jsonify(publish_sidecar(cfg, sidecar))
+        if platform and platform not in available_platforms(cfg):
+            return jsonify(error=f"{platform!r} is not in project.target_platforms"), 400
+        plats = [platform] if platform else None
+        label = f"publishing {stem} → {platform or ', '.join(available_platforms(cfg))}"
+
+        def work():
+            return publish_sidecar(cfg, sidecar, platforms=plats)
+
+        return jsonify(job_id=_start_job("publish", work, label))
 
     @app.post("/api/publish-approved")
     def publish_approved_all():
-        return jsonify(reports=publish_all_approved(cfg))
+        def work():
+            return {"reports": publish_all_approved(cfg)}
+
+        return jsonify(job_id=_start_job("publish", work, "publishing all approved"))
 
     @app.post("/api/generate")
     def api_generate():
@@ -358,20 +502,32 @@ def create_app(cfg: Config) -> Flask:
             s = run_pipeline(cfg, batch=count, do_fetch=do_fetch, dry_run=False)
             return {"built": s.get("built", []), "count": len(s.get("built", []))}
 
-        return jsonify(job_id=_start_job("generate", work))
+        return jsonify(job_id=_start_job("generate", work, f"generating {count} new render(s)"))
 
     @app.post("/api/fetch/<kind>")
     def api_fetch(kind: str):
         if kind not in ("video", "audio"):
             return jsonify(error="kind must be 'video' or 'audio'"), 400
         query = ((request.get_json(silent=True) or {}).get("query") or "").strip() or None
+        label = f"fetching {kind}" + (f" “{query}”" if query else "")
 
         def work():
             from social_peace.pipeline.auto import fetch_audio_library, fetch_video_library
             fn = fetch_video_library if kind == "video" else fetch_audio_library
             return fn(cfg, query=query)
 
-        return jsonify(job_id=_start_job("fetch-" + kind, work))
+        return jsonify(job_id=_start_job("fetch-" + kind, work, label))
+
+    @app.post("/api/captions-bank")
+    def api_captions_bank():
+        def work():
+            from social_peace.pipeline.captions import append_caption_bank, expand_caption_bank
+            add = expand_caption_bank(cfg)
+            if "error" in add:
+                raise RuntimeError(add["error"])
+            return append_caption_bank(cfg, add)
+
+        return jsonify(job_id=_start_job("fetch-captions", work, "fetching caption ideas"))
 
     @app.post("/api/prune-rejected")
     def api_prune_rejected():
@@ -388,22 +544,28 @@ def create_app(cfg: Config) -> Flask:
         sidecar = output_dir / f"{stem}.json"
         if not sidecar.is_file():
             abort(404)
-        change = (request.get_json(silent=True) or {}).get("change")
+        body = request.get_json(silent=True) or {}
+        change = body.get("change")
         if change not in CHANGEABLE:
             return jsonify(error=f"change must be one of {list(CHANGEABLE)}"), 400
+        prefer = (body.get("prefer") or "").strip() or None
         original = json.loads(sidecar.read_text(encoding="utf-8"))
 
         def work():
             from social_peace.pipeline.variant import make_variant
-            res = make_variant(cfg, original, change)
+            res = make_variant(cfg, original, change, prefer=prefer)
             ledger.record(
                 log_dir, "build", video_id=res["id"], template=res["template"],
                 seed=res["seed"], duration=res.get("duration"),
-                sources=res.get("sources"), variant_of=stem, variant_change=change, ok=True,
+                sources=res.get("sources"), variant_of=stem, variant_change=change,
+                variant_prefer=prefer, ok=True,
             )
             return {"id": res["id"], "change": change, "variant_of": stem}
 
-        return jsonify(job_id=_start_job("variant", work))
+        label = f"rendering {stem} with new {change}"
+        if prefer and change != "text":
+            label += f" matching “{prefer}”"
+        return jsonify(job_id=_start_job("variant", work, label))
 
     @app.get("/api/jobs/<job_id>")
     def api_job(job_id: str):
@@ -413,10 +575,20 @@ def create_app(cfg: Config) -> Flask:
             abort(404)
         return jsonify(job)
 
+    @app.get("/api/jobs")
+    def api_jobs():
+        """Running jobs + any that finished within the last _JOB_TTL seconds, so a
+        status the user started elsewhere still shows after navigating."""
+        _prune_jobs()
+        with _JOBS_LOCK:
+            jobs = sorted(_JOBS.values(), key=lambda j: j.get("started_at", 0), reverse=True)
+        return jsonify(jobs=jobs)
+
     return app
 
 
 def serve(cfg: Config, host: str = "127.0.0.1", port: int = 8756) -> None:
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)  # no per-request access lines
     app = create_app(cfg)
     try:
         from social_peace.pipeline.prune import prune_rejected

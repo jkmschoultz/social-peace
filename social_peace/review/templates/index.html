@@ -11,10 +11,17 @@
   }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-  header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); padding:14px 20px; display:flex; gap:16px; align-items:center; flex-wrap:wrap; z-index:5; }
+  header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); padding:12px 20px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; z-index:5; }
   header h1 { font-size:16px; margin:0; font-weight:650; }
-  nav a { text-decoration:none; color:var(--muted); margin-right:12px; }
+  header .left, header .right { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  header .right { margin-left:auto; }
+  nav a { text-decoration:none; color:var(--muted); margin-right:10px; }
   nav a.on { color:var(--ink); font-weight:650; }
+  #fetchQ { flex:0 0 auto; width:170px; padding:7px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); font:inherit; }
+  #genBtn, #fetchVidBtn, #fetchAudBtn, .tb { flex:0 0 auto; }
+  .jobstrip { flex:1 1 100%; font-size:12px; color:var(--muted); display:flex; gap:16px; flex-wrap:wrap; margin-top:2px; }
+  .job.running { color:var(--go); }
+  .job.error { color:var(--no); }
   main { max-width:1100px; margin:0 auto; padding:20px; display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:20px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; }
   .card video { width:100%; background:#000; aspect-ratio:9/16; max-height:60vh; }
@@ -24,6 +31,8 @@
   .srcs { font-size:12px; color:var(--muted); }
   .srcs a { color:inherit; }
   details summary { cursor:pointer; font-size:13px; color:var(--muted); }
+  .cap-btn { flex:0 0 auto; padding:2px 8px; font-size:11px; font-weight:600; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--muted); cursor:pointer; }
+  .cap-out { font-size:11px; margin-top:4px; }
   textarea { width:100%; font:13px/1.4 inherit; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); resize:vertical; }
   label { font-size:12px; color:var(--muted); display:block; margin-top:6px; }
   .row { display:flex; gap:8px; margin-top:4px; }
@@ -46,38 +55,60 @@
   .pub-link:empty { display:none; }
   .pub-out { font-size:12px; color:var(--muted); white-space:pre-wrap; }
   .var-row .var-btn { font-weight:600; }
+  .var-pref { width:100%; margin-top:4px; font:12px/1.4 inherit; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); }
   .var-out { font-size:12px; color:var(--muted); }
   .var-out a { color:var(--go); }
-  #genBtn, #fetchVidBtn, #fetchAudBtn { flex:0 0 auto; }
-  #genMsg { flex:1 1 100%; }
+  header select { padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); font:inherit; }
+  button.ghost { flex:0 0 auto; border:1px solid var(--line); color:var(--muted); }
+  #assetBackdrop { position:fixed; inset:0; background:rgba(0,0,0,.28); z-index:19; }
+  #assetPanel { position:fixed; top:0; right:0; height:100vh; width:min(620px,94vw); background:var(--bg); border-left:1px solid var(--line); box-shadow:-10px 0 30px rgba(0,0,0,.18); z-index:20; display:flex; flex-direction:column; transform:translateX(100%); transition:transform .18s ease; }
+  #assetPanel.open { transform:none; }
+  #assetPanel .ap-head { display:flex; align-items:center; gap:6px; padding:8px 12px; border-bottom:1px solid var(--line); font-weight:650; }
+  #assetPanel .ap-head button, #assetPanel .ap-head a { border:none; background:none; color:var(--muted); font-size:15px; cursor:pointer; text-decoration:none; padding:2px 6px; flex:0 0 auto; }
+  #assetPanel iframe { flex:1; border:0; width:100%; }
 </style>
 </head>
 <body>
 <header>
-  <h1>social-peace review</h1>
-  <nav>
-    {% for f in ['pending','approved','published','rejected','all'] %}
-      <a href="?filter={{f}}&sort={{sort}}" class="{{ 'on' if f == filt else '' }}">{{f}} ({{ counts[f] }})</a>
-    {% endfor %}
-    <a href="/assets">assets</a>
-  </nav>
-  <label class="meta">sort
-    <select id="sortSel">
-      {% for s in sorts %}<option value="{{s}}" {{ 'selected' if s == sort }}>{{s}}</option>{% endfor %}
-    </select>
-  </label>
-  <button id="genBtn">+ Generate new content</button>
-  <button id="fetchVidBtn">⬇ Fetch clips</button>
-  <button id="fetchAudBtn">⬇ Fetch audio</button>
-  {% if counts.approved %}
-    <button class="go" id="pubAll">Publish {{ counts.approved }} approved
-      {%- if platforms %} → {{ platforms|join(', ') }}{% else %} (no platforms set){% endif %}</button>
-  {% endif %}
-  {% if filt == 'rejected' and counts.rejected %}
-    <button class="no" id="pruneBtn">Empty rejected ({{ counts.rejected }})</button>
-  {% endif %}
-  <span id="genMsg" class="meta"></span>
+  <div class="left">
+    <h1>social-peace review</h1>
+    <nav>
+      {% for f in ['pending','approved','published','rejected','all'] %}
+        <a href="?filter={{f}}&sort={{sort}}" class="{{ 'on' if f == filt else '' }}">{{f}} ({{ counts[f] }})</a>
+      {% endfor %}
+      <a href="/assets">assets ↗</a>
+    </nav>
+    <button id="assetToggle" class="ghost">assets ▸</button>
+    {% if filt == 'rejected' and counts.rejected %}
+      <button class="no" id="pruneBtn">Empty rejected ({{ counts.rejected }})</button>
+    {% endif %}
+    {% if counts.approved %}
+      <button class="go" id="pubAll">Publish {{ counts.approved }} approved
+        {%- if platforms %} → {{ platforms|join(', ') }}{% endif %}</button>
+    {% endif %}
+  </div>
+  <div class="right">
+    <label class="meta">sort
+      <select id="sortSel">
+        {% for s in sorts %}<option value="{{s}}" {{ 'selected' if s == sort }}>{{s}}</option>{% endfor %}
+      </select>
+    </label>
+    {% include "_toolbar.html" %}
+  </div>
 </header>
+
+<div id="assetBackdrop" hidden></div>
+<aside id="assetPanel" hidden>
+  <div class="ap-head">
+    <span>assets</span>
+    <span style="flex:1"></span>
+    <button id="assetReload" title="reload panel">⟳</button>
+    <a href="/assets" target="_blank" title="open full page">↗</a>
+    <button id="assetClose" title="close">✕</button>
+  </div>
+  <iframe id="assetFrame" title="asset library"></iframe>
+</aside>
+
 <main id="grid">
   {% if not videos %}<p class="empty">Nothing {{ filt }}.</p>{% endif %}
   {% for v in videos %}
@@ -91,7 +122,7 @@
       <div class="meta">
         <b>{{ v.template }}</b> · {{ '%.0f'|format(v.duration_seconds or 0) }}s · seed {{ v.seed }}
         · <span class="state {{ v._state }}">{{ v._state }}</span>
-        {% if v.variant_of %}· <span title="variant of {{ v.variant_of }}">↻ {{ v.variant_change }}</span>{% endif %}
+        {% if v.variant_of %}· <span title="variant of {{ v.variant_of }}">↻ {{ v.variant_change }}{% if v.variant_prefer %} “{{ v.variant_prefer }}”{% endif %}</span>{% endif %}
       </div>
       <div class="meta">“{{ v.overlay_text }}”</div>
       <div class="srcs">
@@ -105,7 +136,7 @@
         {% endfor %}
       </div>
       <details>
-        <summary>captions</summary>
+        <summary>captions <button type="button" class="cap-btn">↻ regenerate</button></summary>
         <label>YouTube title</label>
         <textarea rows="2" data-f="youtube.title">{{ v.platforms.youtube.title }}</textarea>
         <label>YouTube description</label>
@@ -114,6 +145,7 @@
         <textarea rows="3" data-f="tiktok.caption">{{ v.platforms.tiktok.caption }}</textarea>
         <label>Instagram caption</label>
         <textarea rows="3" data-f="instagram.caption">{{ v.platforms.instagram.caption }}</textarea>
+        <div class="cap-out meta"></div>
       </details>
       <label>note (optional)</label>
       <textarea rows="1" class="note" placeholder="why approved / rejected">{{ v.review.note or '' }}</textarea>
@@ -126,6 +158,7 @@
         <button class="var-btn" data-change="audio">↻ audio</button>
         <button class="var-btn" data-change="text">↻ text</button>
       </div>
+      <input class="var-pref" type="text" placeholder="prefer for ↻ clips/audio, e.g. river ambience (optional)">
       <div class="var-out"></div>
 
       {% if v.review.state == 'approved' and platforms %}
@@ -187,14 +220,17 @@ async function publishPlatform(card, btn) {
   const platform = btn.dataset.platform;
   const out = card.querySelector('.pub-out');
   lockButtons(card, true);
-  out.textContent = 'publishing to ' + platform + '…';
+  out.textContent = 'publishing to ' + platform + '… (runs in the background — safe to navigate)';
   try {
     const r = await fetch('/api/publish/' + encodeURIComponent(stem), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ platform }),
     });
-    const rep = await r.json();
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    if (window.spRefreshJobs) window.spRefreshJobs();
+    const rep = await pollJob(j.job_id);      // publish_sidecar result
     const res = (rep.results || []).find(x => x.platform === platform);
     if (rep.error) {
       out.textContent = 'error: ' + rep.error;
@@ -240,33 +276,26 @@ async function decide(card, state) {
   }
 }
 
-async function pollJob(jobId) {
-  for (;;) {
-    await new Promise(r => setTimeout(r, 2500));
-    const r = await fetch('/api/jobs/' + jobId);
-    if (!r.ok) throw new Error('job not found');
-    const j = await r.json();
-    if (j.state === 'done') return j.result;
-    if (j.state === 'error') throw new Error(j.error || 'job failed');
-  }
-}
-
 async function variant(card, btn) {
   const stem = card.dataset.stem;
   const change = btn.dataset.change;
+  const prefEl = card.querySelector('.var-pref');
+  const prefer = prefEl ? prefEl.value.trim() : '';
   const out = card.querySelector('.var-out');
   card.querySelectorAll('.var-btn').forEach(b => b.disabled = true);
-  out.textContent = 'rendering a copy with new ' + change + '… (~1 min)';
+  out.textContent = 'rendering a copy with new ' + change
+    + (prefer && change !== 'text' ? ' matching “' + prefer + '”' : '') + '… (~1 min)';
   try {
     const r = await fetch('/api/variant/' + encodeURIComponent(stem), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ change }),
+      body: JSON.stringify({ change, prefer }),
     });
     const j = await r.json();
     if (j.error) throw new Error(j.error);
     const res = await pollJob(j.job_id);
-    out.innerHTML = 'new render (' + change + ' changed): <a href="?filter=pending">' + res.id + ' — review in Pending</a>';
+    out.innerHTML = 'new render (' + change + ' changed): <a href="?filter=pending">' + res.id + ' — in Pending</a>';
+    spRefreshGrid();
   } catch (e) {
     out.textContent = 'failed: ' + e.message;
   } finally {
@@ -274,22 +303,106 @@ async function variant(card, btn) {
   }
 }
 
-document.querySelectorAll('.card').forEach(card => {
+async function regenCaptions(card, btn) {
+  const out = card.querySelector('.cap-out');
+  btn.disabled = true;
+  out.textContent = 'regenerating…';
+  try {
+    const r = await fetch('/api/captions/' + encodeURIComponent(card.dataset.stem), { method: 'POST' });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    const set = (f, val) => {
+      const t = card.querySelector('textarea[data-f="' + f + '"]');
+      if (t && val != null) t.value = val;
+    };
+    set('youtube.title', j.platforms.youtube.title);
+    set('youtube.description', j.platforms.youtube.description);
+    set('tiktok.caption', j.platforms.tiktok.caption);
+    set('instagram.caption', j.platforms.instagram.caption);
+    out.textContent = 'new captions (' + j.source + ') saved — edit or Approve as usual';
+  } catch (e) {
+    out.textContent = 'failed: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function bindCard(card) {
   card.querySelectorAll('button[data-state]').forEach(b =>
     b.addEventListener('click', () => decide(card, b.dataset.state)));
   card.querySelectorAll('.pub-btn').forEach(b =>
     b.addEventListener('click', () => publishPlatform(card, b)));
   card.querySelectorAll('.var-btn').forEach(b =>
     b.addEventListener('click', () => variant(card, b)));
-});
+  const cap = card.querySelector('.cap-btn');
+  if (cap) cap.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    regenCaptions(card, cap);
+  });
+}
+function bindCards() { document.querySelectorAll('.card').forEach(bindCard); }
+bindCards();
 
-const genMsg = document.getElementById('genMsg');
+// pull a fresh grid + nav counts in place, without a full reload (keeps scroll,
+// other cards, the header). Used when a job finishes.
+let _gridBusy = 0;
+async function spRefreshGrid() {
+  if (Date.now() - _gridBusy < 1500) return;
+  _gridBusy = Date.now();
+  try {
+    const html = await (await fetch(location.href, { headers: { 'X-Requested-With': 'fetch' } })).text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const y = window.scrollY;
+    ['#grid', 'header nav'].forEach(sel => {
+      const fresh = doc.querySelector(sel), cur = document.querySelector(sel);
+      if (fresh && cur) cur.replaceWith(fresh);
+    });
+    bindCards();
+    window.scrollTo(0, y);
+  } catch (e) { /* leave the page as-is */ }
+}
+window.spRefreshGrid = spRefreshGrid;
+
+// a job that just finished elsewhere / in the strip
+window.spOnJobDone = function (job) {
+  const k = job.kind || '';
+  if (k === 'variant' || k === 'generate') spRefreshGrid();
+  if (k.indexOf('fetch') === 0 && !aPanel.hidden) {
+    try { aFrame.contentWindow.location.reload(); } catch (e) {}
+  }
+};
 
 const sortSel = document.getElementById('sortSel');
 if (sortSel) sortSel.addEventListener('change', () => {
   const u = new URL(location.href);
   u.searchParams.set('sort', sortSel.value);
   location.href = u.toString();
+});
+
+// right-side assets drawer (same content as /assets, via an iframe)
+const aPanel = document.getElementById('assetPanel');
+const aBackdrop = document.getElementById('assetBackdrop');
+const aFrame = document.getElementById('assetFrame');
+function openAssets() {
+  if (!aFrame.getAttribute('src')) aFrame.src = '/assets?embed=1';
+  aBackdrop.hidden = false;
+  aPanel.hidden = false;
+  requestAnimationFrame(() => aPanel.classList.add('open'));
+}
+function closeAssets() {
+  aPanel.classList.remove('open');
+  aBackdrop.hidden = true;
+  setTimeout(() => { aPanel.hidden = true; }, 200);
+}
+const aToggle = document.getElementById('assetToggle');
+if (aToggle) aToggle.addEventListener('click', openAssets);
+document.getElementById('assetClose').addEventListener('click', closeAssets);
+aBackdrop.addEventListener('click', closeAssets);
+document.getElementById('assetReload').addEventListener('click', () => {
+  try { aFrame.contentWindow.location.reload(); } catch (e) {}
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !aPanel.hidden) closeAssets();
 });
 
 const pruneBtn = document.getElementById('pruneBtn');
@@ -309,70 +422,24 @@ if (pruneBtn) pruneBtn.addEventListener('click', async () => {
   }
 });
 
-async function runFetch(btn, kind) {
-  btn.disabled = true;
-  const orig = btn.textContent;
-  btn.textContent = 'fetching ' + kind + '… (~1-2 min)';
-  genMsg.textContent = '';
-  try {
-    const r = await fetch('/api/fetch/' + kind, { method: 'POST' });
-    const { job_id, error } = await r.json();
-    if (error) throw new Error(error);
-    const res = await pollJob(job_id);
-    genMsg.textContent = kind + ': +' + res.fetched + ' fetched, +' + res.promoted +
-      ' added → ' + res.pool_size + ' in the pool' +
-      (res.notes && res.notes.length ? '  [' + res.notes.join('; ') + ']' : '');
-  } catch (e) {
-    genMsg.textContent = kind + ' fetch failed: ' + e.message;
-  } finally {
-    btn.textContent = orig;
-    btn.disabled = false;
-  }
-}
-const fetchVidBtn = document.getElementById('fetchVidBtn');
-const fetchAudBtn = document.getElementById('fetchAudBtn');
-if (fetchVidBtn) fetchVidBtn.addEventListener('click', () => runFetch(fetchVidBtn, 'video'));
-if (fetchAudBtn) fetchAudBtn.addEventListener('click', () => runFetch(fetchAudBtn, 'audio'));
-
-const genBtn = document.getElementById('genBtn');
-if (genBtn) genBtn.addEventListener('click', async () => {
-  genBtn.disabled = true;
-  const orig = genBtn.textContent;
-  genBtn.textContent = 'generating… (a few min)';
-  try {
-    const r = await fetch('/api/generate', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
-    });
-    const { job_id } = await r.json();
-    const res = await pollJob(job_id);
-    genMsg.textContent = res.count + ' new render(s) — opening Pending…';
-    setTimeout(() => { location.href = '?filter=pending'; }, 1200);
-  } catch (e) {
-    genBtn.textContent = orig;
-    genBtn.disabled = false;
-    genMsg.textContent = 'generate failed: ' + e.message;
-  }
-});
-
 const pubAll = document.getElementById('pubAll');
 if (pubAll) pubAll.addEventListener('click', async () => {
   if (!confirm('Publish all approved videos now?')) return;
   pubAll.disabled = true;
-  const orig = pubAll.textContent;
   pubAll.textContent = 'publishing…';
   try {
     const r = await fetch('/api/publish-approved', { method: 'POST' });
-    const { reports } = await r.json();
-    reports.forEach(rep => {
-      const card = document.querySelector(`.card[data-stem="${rep.id}"] .pub-out`);
-      if (card) renderResults(card, rep);
+    const { job_id } = await r.json();
+    if (window.spRefreshJobs) window.spRefreshJobs();
+    const { reports } = await pollJob(job_id);
+    (reports || []).forEach(rep => {
+      const el = document.querySelector(`.card[data-stem="${rep.id}"] .pub-out`);
+      if (el) renderResults(el, rep);
     });
-    pubAll.textContent = 'done — reloading…';
-    setTimeout(() => location.reload(), 1500);  // re-render so buttons grey out
+    setTimeout(() => location.reload(), 1500);
   } catch (e) {
-    pubAll.textContent = orig;
-    alert('failed: ' + e.message);
     pubAll.disabled = false;
+    alert('failed: ' + e.message);
   }
 });
 </script>

@@ -120,14 +120,20 @@ def build_one(
     dry_run: bool = False,
     used_video: set[str] | None = None,
     used_audio: set[str] | None = None,
+    soft_used_video: set[str] | None = None,
+    soft_used_audio: set[str] | None = None,
     pin: dict | None = None,
     exclude_text: str | None = None,
+    prefer_video: str | None = None,
+    prefer_audio: str | None = None,
     extra_meta: dict | None = None,
 ) -> dict:
     sel = build_selection(
         cfg, seed=seed, template_name=template_name, duration=duration,
         used_video=used_video, used_audio=used_audio,
+        soft_used_video=soft_used_video, soft_used_audio=soft_used_audio,
         pin=pin, exclude_text=exclude_text,
+        prefer_video=prefer_video, prefer_audio=prefer_audio,
     )
 
     w, h = cfg.render["resolution"]

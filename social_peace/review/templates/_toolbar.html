@@ -1,0 +1,115 @@
+<input id="fetchQ" type="text" placeholder="custom query (blank = rotate)">
+<button id="fetchVidBtn" class="tb">⬇ clips</button>
+<button id="fetchAudBtn" class="tb">⬇ audio</button>
+<button id="fetchCapBtn" class="tb">⬇ captions</button>
+<button id="genBtn" class="go">+ Generate new content</button>
+<div id="jobStrip" class="jobstrip"></div>
+<script>
+(function () {
+  window.pollJob = async function (id) {
+    for (;;) {
+      await new Promise(r => setTimeout(r, 10000));
+      const r = await fetch('/api/jobs/' + id);
+      if (!r.ok) throw new Error('job not found');
+      const j = await r.json();
+      if (j.state === 'done') return j.result;
+      if (j.state === 'error') throw new Error(j.error || 'job failed');
+    }
+  };
+
+  const strip = document.getElementById('jobStrip');
+  function line(j) {
+    const res = j.result || {};
+    if (j.state === 'running') return '⏳ ' + j.label + '…';
+    if (j.state === 'error') return '⚠ ' + j.label + ' — ' + (j.error || 'failed');
+    if (j.kind === 'generate') return '✓ generated ' + (res.count != null ? res.count : '?') + ' render(s)';
+    if (j.kind === 'fetch-captions') return '✓ ' + j.label + ' — +' + (res.fetched || 0) + ' new lines';
+    if ((j.kind || '').indexOf('fetch') === 0)
+      return '✓ ' + j.label + ' — +' + (res.fetched || 0) + ' (pool ' + (res.pool_size != null ? res.pool_size : '?') + ')';
+    if (j.kind === 'variant') return '✓ variant ready — ' + (res.id || '');
+    return '✓ ' + j.label;
+  }
+  const prevState = {};
+  async function refresh() {
+    let jobs = [];
+    try { jobs = (await (await fetch('/api/jobs')).json()).jobs || []; } catch (e) { return; }
+    strip.innerHTML = jobs
+      .map(j => '<span class="job ' + j.state + '">' + line(j) + '</span>')
+      .join('');
+    jobs.forEach(j => {
+      if (prevState[j.id] === 'running' && j.state !== 'running'
+          && typeof window.spOnJobDone === 'function') {
+        try { window.spOnJobDone(j); } catch (e) {}
+      }
+      prevState[j.id] = j.state;
+    });
+    if (jobs.some(j => j.state === 'running')) setTimeout(refresh, 10000);
+  }
+  window.spRefreshJobs = refresh;
+  refresh();
+
+  async function runFetch(kind) {
+    const box = document.getElementById('fetchQ');
+    const q = box ? box.value.trim() : '';
+    const btns = ['fetchVidBtn', 'fetchAudBtn'].map(id => document.getElementById(id)).filter(Boolean);
+    btns.forEach(b => b.disabled = true);
+    try {
+      const r = await fetch('/api/fetch/' + kind, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: q }),
+      });
+      const { job_id, error } = await r.json();
+      if (error) throw new Error(error);
+      refresh();
+      await pollJob(job_id);
+      refresh();
+      // update the visible list in place (assets page / drawer); spOnJobDone
+      // on the strip poll covers the case where the user navigated away
+      if (typeof window.spOnJobDone === 'function') {
+        window.spOnJobDone({ kind: 'fetch-' + kind });
+      }
+    } catch (e) {
+      alert(kind + ' fetch failed: ' + e.message);
+    } finally {
+      btns.forEach(b => b.disabled = false);
+    }
+  }
+  const fv = document.getElementById('fetchVidBtn');
+  const fa = document.getElementById('fetchAudBtn');
+  if (fv) fv.addEventListener('click', () => runFetch('video'));
+  if (fa) fa.addEventListener('click', () => runFetch('audio'));
+
+  const fc = document.getElementById('fetchCapBtn');
+  if (fc) fc.addEventListener('click', async () => {
+    fc.disabled = true;
+    try {
+      const r = await fetch('/api/captions-bank', { method: 'POST' });
+      const { job_id, error } = await r.json();
+      if (error) throw new Error(error);
+      refresh();
+      await pollJob(job_id);
+      refresh();
+    } catch (e) {
+      alert('caption ideas failed: ' + e.message);
+    } finally {
+      fc.disabled = false;
+    }
+  });
+
+  const gen = document.getElementById('genBtn');
+  if (gen) gen.addEventListener('click', async () => {
+    gen.disabled = true;
+    try {
+      const r = await fetch('/api/generate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      });
+      const { job_id } = await r.json();
+      refresh();
+      await pollJob(job_id);
+      location.href = '/?filter=pending';
+    } catch (e) {
+      alert('generate failed: ' + e.message);
+      gen.disabled = false;
+    }
+  });
+})();
+</script>

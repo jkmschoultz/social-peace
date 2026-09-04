@@ -51,6 +51,29 @@ def test_themed_expands_rain_to_water_scenes():
     assert "rain" in ex
 
 
+def test_soft_used_audio_is_a_low_priority_nudge():
+    """With every-but-one bed marked soft-used, the fresh one is picked — but an
+    explicit prefer still overrides soft-used."""
+    cfg = Config.load()
+    beds = [p.name for p in _list_media(cfg.path("audio_assets"), AUDIO_EXTS)]
+    fresh = beds[-1]
+    sel = build_selection(
+        cfg, seed=3, template_name="cool-tide",  # 1 stem
+        soft_used_audio=set(beds) - {fresh},
+    )
+    assert fresh in [a.path.name for a in sel.audio]
+
+    # a preference beats the soft-used nudge
+    rainish = [b for b in beds if "rain" in b or "river" in b]
+    if rainish:
+        sel2 = build_selection(
+            cfg, seed=3, template_name="cool-tide",
+            soft_used_audio=set(rainish),      # all rain beds "used elsewhere"
+            prefer_audio="gentle rain",        # but I explicitly want rain
+        )
+        assert any("rain" in a.path.name or "river" in a.path.name for a in sel2.audio)
+
+
 def test_favourite_audio_is_preferred():
     cfg = Config.load()
     beds = _list_media(cfg.path("audio_assets"), AUDIO_EXTS)

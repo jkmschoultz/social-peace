@@ -29,6 +29,33 @@ def _read_yaml(path: Path) -> Any:
         return yaml.safe_load(fh)
 
 
+CAPTION_BANK_FILE = "config/caption_bank.yaml"
+
+# bank key -> where it extends in the loaded config
+_BANK_MAP = {
+    "overlay_text": ("overlay_text",),
+    "youtube_title_templates": ("metadata", "youtube", "title_templates"),
+    "tiktok_caption_templates": ("metadata", "tiktok", "caption_templates"),
+    "instagram_caption_templates": ("metadata", "instagram", "caption_templates"),
+}
+
+
+def merge_caption_bank(raw: dict, bank: dict) -> None:
+    """Append the caption-bank lines into the loaded config, in place, no dupes."""
+    for bank_key, path in _BANK_MAP.items():
+        extra = [str(x).strip() for x in (bank.get(bank_key) or []) if str(x).strip()]
+        if not extra:
+            continue
+        node = raw
+        for seg in path[:-1]:
+            node = node.setdefault(seg, {})
+        cur = list(node.get(path[-1], []))
+        for line in extra:
+            if line not in cur:
+                cur.append(line)
+        node[path[-1]] = cur
+
+
 @dataclass
 class Config:
     root: Path
@@ -53,6 +80,10 @@ class Config:
             man_path = root_path / man_rel
             if man_path.is_file():
                 manifest = _read_yaml(man_path) or {}
+
+        bank_path = root_path / CAPTION_BANK_FILE
+        if bank_path.is_file():
+            merge_caption_bank(raw, _read_yaml(bank_path) or {})
 
         cfg = cls(root=root_path, raw=raw, templates=templates, manifest=manifest)
         cfg._validate()

@@ -6,8 +6,9 @@
   social-peace run     [--count N]        # build + publish to project.target_platforms
   social-peace pipeline [--batch N] [--no-fetch] [--dry-run]   # scrape -> render a review batch
   social-peace review  [--host H] [--port P]                   # web UI to approve/reject
-  social-peace variant STEM --change video|audio|text          # re-render, one thing swapped
+  social-peace variant STEM --change video|audio|text [--prefer "river ambience"]  # re-render, one thing swapped
   social-peace publish-approved [--platform P] [--limit N]     # post the approved renders
+  social-peace captions-bank [--per-list N] # LLM-generate more caption/overlay lines into the bank
   social-peace prune   [--days N] [--all]  # delete rejected renders to free output/ space
   social-peace ledger  [--limit N]        # tail the posts.jsonl ledger
 """
@@ -153,11 +154,11 @@ def cmd_variant(args: argparse.Namespace) -> int:
         log.error("no sidecar: %s", side)
         return 1
     original = json.loads(side.read_text(encoding="utf-8"))
-    res = make_variant(cfg, original, args.change)
+    res = make_variant(cfg, original, args.change, prefer=args.prefer)
     ledger.record(
         cfg.path("logs"), "build", video_id=res["id"], template=res["template"],
         seed=res["seed"], duration=res.get("duration"), sources=res.get("sources"),
-        variant_of=original["id"], variant_change=args.change, ok=True,
+        variant_of=original["id"], variant_change=args.change, variant_prefer=args.prefer, ok=True,
     )
     print(res["video"])
     return 0
@@ -213,6 +214,22 @@ def cmd_publish_approved(args: argparse.Namespace) -> int:
                 print(f"{rep['id']} -> {r['platform']}: FAILED {r['error']}")
                 rc = 1
     return rc
+
+
+# -------------------------------------------------------------------- captions-bank
+def cmd_captions_bank(args: argparse.Namespace) -> int:
+    from social_peace.pipeline.captions import append_caption_bank, expand_caption_bank
+
+    cfg = _bootstrap()
+    add = expand_caption_bank(cfg, per_list=args.per_list)
+    if "error" in add:
+        log.error("%s", add["error"])
+        return 1
+    res = append_caption_bank(cfg, add)
+    print(f"added {res['fetched']} new lines to config/caption_bank.yaml")
+    for k, n in res["added"].items():
+        print(f"  {k}: +{n}  (total {res['total'][k]})")
+    return 0
 
 
 # ---------------------------------------------------------------------------- prune
@@ -294,6 +311,7 @@ def build_parser() -> argparse.ArgumentParser:
     vr = sub.add_parser("variant", help="re-render one video with new clips / audio / text")
     vr.add_argument("stem", help="sidecar stem (or path) of the render to vary")
     vr.add_argument("--change", required=True, choices=["video", "audio", "text"])
+    vr.add_argument("--prefer", default=None, help="bias the re-roll toward assets matching this text")
     vr.set_defaults(func=cmd_variant)
 
     pa = sub.add_parser("publish-approved", help="publish every approved, not-yet-posted render")
@@ -302,6 +320,10 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--limit", type=int, default=None, help="cap how many to publish this run")
     pa.add_argument("--dry-run", action="store_true")
     pa.set_defaults(func=cmd_publish_approved)
+
+    cb = sub.add_parser("captions-bank", help="ask Claude for new caption/overlay lines, add to the bank")
+    cb.add_argument("--per-list", type=int, default=6)
+    cb.set_defaults(func=cmd_captions_bank)
 
     pr = sub.add_parser("prune", help="delete rejected renders (default: older than 30 days)")
     pr.add_argument("--days", type=int, default=30)
