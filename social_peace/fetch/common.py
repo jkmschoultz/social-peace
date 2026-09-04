@@ -87,6 +87,25 @@ def append_manifest_stub(manifest_path: Path, kind: str, filename: str, entry: d
     )
 
 
+def update_manifest_entry(manifest_path: Path, kind: str, filename: str, updates: dict) -> dict:
+    """Merge `updates` into one manifest entry, creating it if absent. Keys set to
+    None are removed. Returns the resulting entry."""
+    data = {}
+    if manifest_path.exists():
+        data = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+    entry = data.setdefault(kind, {}).setdefault(filename, {})
+    for k, v in updates.items():
+        if v is None:
+            entry.pop(k, None)
+        else:
+            entry[k] = v
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        yaml.safe_dump(data, sort_keys=True, allow_unicode=True), encoding="utf-8"
+    )
+    return entry
+
+
 def remove_manifest_entry(manifest_path: Path, kind: str, filename: str) -> bool:
     """Drop one provenance entry from assets/manifest.yaml. Returns True if removed."""
     if not manifest_path.exists():

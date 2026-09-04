@@ -47,8 +47,10 @@ python -m social_peace pipeline --no-fetch     # just render from the current as
 #    runs). Every card has "↻ clips / ↻ audio / ↻ text" to re-render it with one
 #    thing swapped. Sort dropdown (newest / oldest / seed / template / status).
 #    The "assets" nav link lists every clip / bed (source, licence, size, which
-#    render states use it) with a per-usage filter and a remove button. The
-#    rejected tab has an "Empty rejected" button.
+#    render states use it): ★ favourite (favourites get preferred in selection),
+#    ✎ rename (display label, kept in the manifest), remove, a per-usage /
+#    favourite filter, and a custom-query fetch bar. The rejected tab has an
+#    "Empty rejected" button.
 python -m social_peace review                  # http://127.0.0.1:8756
 
 # reclaim output/ space — drop rejected renders (cron this; the review server
@@ -197,6 +199,7 @@ late rather than skip.
 - [x] "Generate new content" button in the review UI (background render job)
 - [x] "Fetch clips" / "Fetch audio" buttons — top up the asset library on demand
 - [x] Assets page — list + preview + remove every clip/bed, filter by usage
+- [x] Favourite / rename assets; custom-query fetch from the UI
 - [x] Sort the review grid; `prune` rejected renders (30-day auto + button)
 - [x] TikTok Content Posting API publisher (skeleton — not yet run live)
 - [x] Instagram Graph API (Reels) publisher + auto cloudflared tunnel for the fetch

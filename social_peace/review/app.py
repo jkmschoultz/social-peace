@@ -17,7 +17,7 @@ from flask import Flask, abort, jsonify, render_template, request, send_from_dir
 
 from social_peace import ledger
 from social_peace.config import Config
-from social_peace.fetch.common import remove_manifest_entry
+from social_peace.fetch.common import remove_manifest_entry, update_manifest_entry
 from social_peace.pipeline.metadata import REVIEW_STATES, set_review
 from social_peace.pipeline.selectors import AUDIO_EXTS, VIDEO_EXTS, _list_media
 from social_peace.pipeline.variant import CHANGEABLE
@@ -89,11 +89,14 @@ def _asset_rows(cfg: Config, kind: str, usage: dict[str, set], filt: str = "all"
     rows = []
     for p in _list_media(folder, exts):
         states = usage.get(p.name, set())
-        if not _asset_matches(filt, states):
-            continue
         m = man.get(p.name) or {}
+        fav = bool(m.get("favourite"))
+        if not _asset_matches(filt, states, fav):
+            continue
         rows.append({
             "name": p.name,
+            "label": m.get("label") or None,
+            "favourite": fav,
             "size": p.stat().st_size,
             "duration": _duration(p),
             "source": m.get("source"),
@@ -103,6 +106,7 @@ def _asset_rows(cfg: Config, kind: str, usage: dict[str, set], filt: str = "all"
             "used": bool(states),
             "states": sorted(states),
         })
+    rows.sort(key=lambda r: (not r["favourite"], (r["label"] or r["name"]).lower()))
     return rows
 
 
@@ -183,12 +187,14 @@ def _asset_usage(cfg: Config) -> dict[str, dict[str, set]]:
     return out
 
 
-_ASSET_FILTERS = ("all", "unused", "used", "pending", "approved", "published", "rejected")
+_ASSET_FILTERS = ("all", "favourite", "unused", "used", "pending", "approved", "published", "rejected")
 
 
-def _asset_matches(filt: str, states: set) -> bool:
+def _asset_matches(filt: str, states: set, favourite: bool = False) -> bool:
     if filt == "all":
         return True
+    if filt == "favourite":
+        return favourite
     if filt == "unused":
         return not states
     if filt == "used":
@@ -248,6 +254,28 @@ def create_app(cfg: Config) -> Flask:
         if not (folder / name).is_file():
             abort(404)
         return send_from_directory(folder, name, conditional=True)
+
+    @app.post("/api/asset/<kind>/<name>/update")
+    def asset_update(kind: str, name: str):
+        if kind not in ("video", "audio"):
+            return jsonify(error="kind must be 'video' or 'audio'"), 400
+        name = _safe_stem(name)
+        folder = cfg.path("video_assets" if kind == "video" else "audio_assets")
+        if not (folder / name).is_file():
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        updates: dict = {}
+        if "label" in body:
+            lbl = (body["label"] or "").strip()
+            updates["label"] = lbl or None
+        if "favourite" in body:
+            updates["favourite"] = bool(body["favourite"]) or None
+        if not updates:
+            return jsonify(error="nothing to update (send label and/or favourite)"), 400
+        man_path = cfg.root / cfg.raw.get("assets_manifest", "assets/manifest.yaml")
+        entry = update_manifest_entry(man_path, kind, name, updates)
+        cfg.manifest.setdefault(kind, {})[name] = entry  # keep in-process view fresh
+        return jsonify(ok=True, label=entry.get("label"), favourite=bool(entry.get("favourite")))
 
     @app.post("/api/asset/<kind>/<name>/delete")
     def asset_delete(kind: str, name: str):
@@ -336,11 +364,12 @@ def create_app(cfg: Config) -> Flask:
     def api_fetch(kind: str):
         if kind not in ("video", "audio"):
             return jsonify(error="kind must be 'video' or 'audio'"), 400
+        query = ((request.get_json(silent=True) or {}).get("query") or "").strip() or None
 
         def work():
             from social_peace.pipeline.auto import fetch_audio_library, fetch_video_library
             fn = fetch_video_library if kind == "video" else fetch_audio_library
-            return fn(cfg)
+            return fn(cfg, query=query)
 
         return jsonify(job_id=_start_job("fetch-" + kind, work))
 

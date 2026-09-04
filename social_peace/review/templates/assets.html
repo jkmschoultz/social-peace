@@ -5,26 +5,34 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>social-peace assets</title>
 <style>
-  :root { color-scheme: light dark; --bg:#f6f6f4; --card:#fff; --line:#e2e2dc; --ink:#1c1c1a; --muted:#6b6b63; --no:#a12b2b; --go:#1d5fb0; --warn:#9a6b1a; }
+  :root { color-scheme: light dark; --bg:#f6f6f4; --card:#fff; --line:#e2e2dc; --ink:#1c1c1a; --muted:#6b6b63; --no:#a12b2b; --go:#1d5fb0; --warn:#9a6b1a; --star:#c99a1e; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#15150f; --card:#20201a; --line:#33332a; --ink:#ececdf; --muted:#9a9a8c; --no:#e06a6a; --go:#5aa0f0; --warn:#d0a24a; }
+    :root { --bg:#15150f; --card:#20201a; --line:#33332a; --ink:#ececdf; --muted:#9a9a8c; --no:#e06a6a; --go:#5aa0f0; --warn:#d0a24a; --star:#e0b84a; }
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-  header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); padding:14px 20px; display:flex; gap:16px; align-items:baseline; }
+  header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); padding:14px 20px; display:flex; gap:14px; align-items:center; flex-wrap:wrap; z-index:5; }
   header h1 { font-size:16px; margin:0; font-weight:650; }
   header a { color:var(--muted); text-decoration:none; }
+  input, select { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); }
+  #fetchQ { width:200px; }
   main { max-width:1000px; margin:0 auto; padding:20px; }
   h2 { font-size:14px; font-weight:650; margin:24px 0 8px; }
-  .row { display:grid; grid-template-columns:auto 1fr auto; gap:12px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); }
+  #fetchMsg { flex:1 1 100%; font-size:12px; color:var(--muted); }
+  .row { display:grid; grid-template-columns:auto auto 1fr auto; gap:12px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); }
   .row .prev { width:120px; }
   .row .prev video, .row .prev audio { width:120px; }
   .row .prev audio { height:32px; }
   .name { font-weight:600; word-break:break-all; }
+  .name input { width:100%; font-weight:600; }
+  .fname { font-size:11px; color:var(--muted); word-break:break-all; }
   .meta { font-size:12px; color:var(--muted); }
   .meta a { color:var(--go); }
   .used { color:var(--warn); font-weight:600; }
-  button { padding:7px 12px; border:1px solid var(--no); border-radius:8px; background:var(--bg); color:var(--no); font:inherit; font-weight:600; cursor:pointer; }
+  .star { border:none; background:none; font-size:20px; line-height:1; padding:0 4px; cursor:pointer; color:var(--muted); }
+  .star.on { color:var(--star); }
+  .edit { border:none; background:none; cursor:pointer; color:var(--muted); font-size:13px; }
+  button.rm { padding:7px 12px; border:1px solid var(--no); border-radius:8px; background:var(--bg); color:var(--no); font:inherit; font-weight:600; cursor:pointer; }
   button:disabled { opacity:.5; cursor:default; }
   .empty { color:var(--muted); padding:12px 0; }
 </style>
@@ -38,6 +46,10 @@
       {% for f in filters %}<option value="{{f}}" {{ 'selected' if f == filt }}>{{f}}</option>{% endfor %}
     </select>
   </label>
+  <input id="fetchQ" type="text" placeholder="custom query (blank = rotate)">
+  <button id="fetchVid" class="rm" style="border-color:var(--go);color:var(--go)">⬇ clips</button>
+  <button id="fetchAud" class="rm" style="border-color:var(--go);color:var(--go)">⬇ audio</button>
+  <span id="fetchMsg"></span>
 </header>
 <main>
   {% for kind, rows, total in [('video', video, total_video), ('audio', audio, total_audio)] %}
@@ -45,6 +57,7 @@
   {% if not rows %}<p class="empty">none{% if filt != 'all' %} match “{{ filt }}”{% endif %}</p>{% endif %}
   {% for r in rows %}
   <div class="row" data-kind="{{ kind }}" data-name="{{ r.name }}">
+    <button class="star {{ 'on' if r.favourite }}" title="favourite">{{ '★' if r.favourite else '☆' }}</button>
     <div class="prev">
       {% if kind == 'video' %}
         <video preload="none" muted controls src="/asset-media/video/{{ r.name }}"></video>
@@ -53,7 +66,11 @@
       {% endif %}
     </div>
     <div>
-      <div class="name">{{ r.name }}</div>
+      <div class="name">
+        <span class="label">{{ r.label or r.name }}</span>
+        <button class="edit" title="rename">✎</button>
+      </div>
+      {% if r.label %}<div class="fname">{{ r.name }}</div>{% endif %}
       <div class="meta">
         {{ (r.size / 1048576)|round(1) }} MB{% if r.duration %} · {{ r.duration|round|int }}s{% endif %}
         {%- if r.tags %} · {{ r.tags|join(', ') }}{% endif %}
@@ -76,24 +93,90 @@ if (assetFilter) assetFilter.addEventListener('change', () => {
   location.href = '/assets?filter=' + encodeURIComponent(assetFilter.value);
 });
 
-document.querySelectorAll('.row .rm').forEach(btn => btn.addEventListener('click', async () => {
-  const row = btn.closest('.row');
+async function apiAsset(kind, name, action, body) {
+  const r = await fetch('/api/asset/' + kind + '/' + encodeURIComponent(name) + '/' + action, {
+    method: 'POST',
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+document.querySelectorAll('.row').forEach(row => {
   const { kind, name } = row.dataset;
-  const used = row.querySelector('.used');
-  const msg = 'Delete ' + name + '?' + (used ? '\n\nA render already uses it; its finished mp4 is unaffected, but future renders and ↻ variants can no longer use this file.' : '');
-  if (!confirm(msg)) return;
-  btn.disabled = true;
-  try {
-    const r = await fetch('/api/asset/' + kind + '/' + encodeURIComponent(name) + '/delete', { method: 'POST' });
+
+  row.querySelector('.star').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const next = !btn.classList.contains('on');
+    btn.disabled = true;
+    try {
+      await apiAsset(kind, name, 'update', { favourite: next });
+      btn.classList.toggle('on', next);
+      btn.textContent = next ? '★' : '☆';
+    } catch (err) { alert('failed: ' + err.message); }
+    finally { btn.disabled = false; }
+  });
+
+  row.querySelector('.edit').addEventListener('click', async () => {
+    const cur = row.querySelector('.label').textContent;
+    const val = prompt('Display name for ' + name + '  (blank = use the filename):', cur);
+    if (val === null) return;
+    try {
+      await apiAsset(kind, name, 'update', { label: val.trim() });
+      location.reload();
+    } catch (err) { alert('failed: ' + err.message); }
+  });
+
+  row.querySelector('.rm').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const used = row.querySelector('.used');
+    const msg = 'Delete ' + name + '?' + (used ? '\n\nA render already uses it; its finished mp4 is unaffected, but future renders and ↻ variants can no longer use this file.' : '');
+    if (!confirm(msg)) return;
+    btn.disabled = true;
+    try {
+      const j = await apiAsset(kind, name, 'delete');
+      row.remove();
+      document.getElementById('count-' + kind).textContent = j.pool_size;
+    } catch (err) { btn.disabled = false; alert('failed: ' + err.message); }
+  });
+});
+
+async function pollJob(id) {
+  for (;;) {
+    await new Promise(r => setTimeout(r, 2500));
+    const r = await fetch('/api/jobs/' + id);
+    if (!r.ok) throw new Error('job not found');
     const j = await r.json();
-    if (!r.ok || j.error) throw new Error(j.error || r.statusText);
-    row.remove();
-    document.getElementById('count-' + kind).textContent = j.pool_size;
-  } catch (e) {
-    btn.disabled = false;
-    alert('failed: ' + e.message);
+    if (j.state === 'done') return j.result;
+    if (j.state === 'error') throw new Error(j.error || 'job failed');
   }
-}));
+}
+
+const fetchMsg = document.getElementById('fetchMsg');
+async function runFetch(btn, kind) {
+  const q = document.getElementById('fetchQ').value.trim();
+  document.querySelectorAll('#fetchVid,#fetchAud').forEach(b => b.disabled = true);
+  fetchMsg.textContent = 'fetching ' + kind + (q ? ' “' + q + '”' : '') + '… (~1-2 min)';
+  try {
+    const r = await fetch('/api/fetch/' + kind, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: q }),
+    });
+    const { job_id, error } = await r.json();
+    if (error) throw new Error(error);
+    const res = await pollJob(job_id);
+    fetchMsg.textContent = kind + ': +' + res.fetched + ' fetched, +' + res.promoted +
+      ' added → ' + res.pool_size + ' in the pool  [' + (res.notes || []).join('; ') + ']  — reloading…';
+    setTimeout(() => location.reload(), 1500);
+  } catch (e) {
+    fetchMsg.textContent = kind + ' fetch failed: ' + e.message;
+    document.querySelectorAll('#fetchVid,#fetchAud').forEach(b => b.disabled = false);
+  }
+}
+document.getElementById('fetchVid').addEventListener('click', e => runFetch(e.currentTarget, 'video'));
+document.getElementById('fetchAud').addEventListener('click', e => runFetch(e.currentTarget, 'audio'));
 </script>
 </body>
 </html>

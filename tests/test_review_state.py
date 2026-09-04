@@ -2,6 +2,7 @@ import json
 import time
 
 import pytest
+import yaml
 
 from social_peace.config import Config
 from social_peace.review.app import create_app
@@ -242,6 +243,48 @@ def test_fetch_endpoint_runs_job(client, monkeypatch, kind):
 def test_fetch_endpoint_bad_kind(client):
     c, *_ = client
     assert c.post("/api/fetch/fonts").status_code == 400
+
+
+def test_fetch_endpoint_passes_custom_query(client, monkeypatch):
+    c, *_ = client
+    seen = {}
+    from social_peace.pipeline import auto as amod
+    monkeypatch.setattr(amod, "fetch_video_library",
+                        lambda cfg, **kw: seen.update(kw) or {"kind": "video", "fetched": 1, "promoted": 1, "pool_size": 9, "notes": []})
+    _wait_job(c, c.post("/api/fetch/video", json={"query": "slow river"}).get_json()["job_id"])
+    assert seen.get("query") == "slow river"
+
+
+def test_asset_update_label_and_favourite(client, tmp_path):
+    c, *_ = client
+    (tmp_path / "audio" / "b.mp3").write_bytes(b"x" * 8)
+    r = c.post("/api/asset/audio/b.mp3/update", json={"label": "rainy calm", "favourite": True})
+    assert r.status_code == 200
+    j = r.get_json()
+    assert j["label"] == "rainy calm" and j["favourite"] is True
+    man = yaml.safe_load((tmp_path / "assets" / "manifest.yaml").read_text())
+    assert man["audio"]["b.mp3"]["favourite"] is True
+    # clearing
+    r2 = c.post("/api/asset/audio/b.mp3/update", json={"label": "", "favourite": False})
+    j2 = r2.get_json()
+    assert j2["label"] is None and j2["favourite"] is False
+
+
+def test_asset_update_guards(client, tmp_path):
+    c, *_ = client
+    (tmp_path / "audio" / "x.mp3").write_bytes(b"x")
+    assert c.post("/api/asset/audio/x.mp3/update", json={}).status_code == 400
+    assert c.post("/api/asset/audio/missing.mp3/update", json={"favourite": True}).status_code == 404
+    assert c.post("/api/asset/fonts/x/update", json={"favourite": True}).status_code == 400
+
+
+def test_assets_favourite_filter(client, tmp_path):
+    c, *_ = client
+    (tmp_path / "video" / "fav.mp4").write_bytes(b"x")
+    (tmp_path / "video" / "plain.mp4").write_bytes(b"y")
+    c.post("/api/asset/video/fav.mp4/update", json={"favourite": True})
+    html = c.get("/assets?filter=favourite").get_data(as_text=True)
+    assert "fav.mp4" in html and "plain.mp4" not in html
 
 
 def test_assets_page_lists_files(client, tmp_path):

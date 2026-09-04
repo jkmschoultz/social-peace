@@ -170,6 +170,7 @@ def build_selection(
             audio_pool,
             key=lambda p: (
                 p.name in used_audio,                        # unused first
+                not cfg.favourite("audio", p.name),         # then favourites
                 -_tag_score(cfg, "audio", p, wanted_a),      # template tag pref
                 rng.random(),
             ),
@@ -213,6 +214,7 @@ def build_selection(
             video_pool,
             key=lambda p: (
                 p.name in used_video,                                     # unused first
+                not cfg.favourite("video", p.name),                       # then favourites
                 -len(_keywords(cfg, "video", p.name) & audio_kw),         # match the audio
                 -_tag_score(cfg, "video", p, wanted_v),                   # template tag pref
                 rng.random(),

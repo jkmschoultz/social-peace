@@ -89,3 +89,12 @@ class Config:
         """kind is 'video' or 'audio'. Returns the manifest provenance URL, or None."""
         entry = (self.manifest.get(kind) or {}).get(filename) or {}
         return entry.get("url") or None
+
+    def _entry(self, kind: str, filename: str) -> dict:
+        return (self.manifest.get(kind) or {}).get(filename) or {}
+
+    def favourite(self, kind: str, filename: str) -> bool:
+        return bool(self._entry(kind, filename).get("favourite"))
+
+    def label_for(self, kind: str, filename: str) -> str | None:
+        return self._entry(kind, filename).get("label") or None

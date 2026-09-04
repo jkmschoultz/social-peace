@@ -42,16 +42,17 @@ def _promote_and_count(cfg: Config, kind: str) -> tuple[int, int]:
     return moved, len(_list_media(folder, exts))
 
 
-def fetch_video_library(cfg: Config, *, limit: int | None = None) -> dict:
-    """Pull stock clips — one rotating query per configured source — and
-    auto-promote them into assets/video/ for future renders."""
+def fetch_video_library(cfg: Config, *, limit: int | None = None, query: str | None = None) -> dict:
+    """Pull stock clips and auto-promote them into assets/video/. `query` fetches
+    that exact term from every source; otherwise one rotating pipeline.queries
+    term per source."""
     pcfg = cfg.raw.get("pipeline", {})
     limit = int(limit or pcfg.get("fetch_per_run", 6))
     vqueries = pcfg.get("queries", {}).get("video", []) or [None]
     rng = random.Random()
     fetched, notes = 0, []
     for source in pcfg.get("fetch_sources", ["pexels", "pixabay"]):
-        q = rng.choice(vqueries)
+        q = query or rng.choice(vqueries)
         try:
             got = _fetch_video(cfg, source, q, limit)
             fetched += len(got)
@@ -63,13 +64,14 @@ def fetch_video_library(cfg: Config, *, limit: int | None = None) -> dict:
     return {"kind": "video", "fetched": fetched, "promoted": moved, "pool_size": pool, "notes": notes}
 
 
-def fetch_audio_library(cfg: Config, *, limit: int | None = None) -> dict:
-    """Pull CC0 beds from Freesound (one rotating query) and auto-promote them
-    into assets/audio/. Needs FREESOUND_API_KEY; without it, a no-op."""
+def fetch_audio_library(cfg: Config, *, limit: int | None = None, query: str | None = None) -> dict:
+    """Pull CC0 beds from Freesound and auto-promote them into assets/audio/.
+    `query` overrides the rotating pipeline.queries.audio term. Needs
+    FREESOUND_API_KEY; without it, a no-op."""
     pcfg = cfg.raw.get("pipeline", {})
     limit = int(limit or pcfg.get("fetch_per_run", 6))
     aqueries = pcfg.get("queries", {}).get("audio", []) or [None]
-    q = random.Random().choice(aqueries)
+    q = query or random.Random().choice(aqueries)
     fetched, notes = 0, []
     try:
         got = _fetch_audio(cfg, q, limit)

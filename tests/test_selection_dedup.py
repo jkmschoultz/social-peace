@@ -49,3 +49,15 @@ def test_themed_expands_rain_to_water_scenes():
     ex = _themed({"rain"})
     assert {"water", "waterfall", "stream"} <= ex
     assert "rain" in ex
+
+
+def test_favourite_audio_is_preferred():
+    cfg = Config.load()
+    beds = _list_media(cfg.path("audio_assets"), AUDIO_EXTS)
+    target = beds[-1].name
+    cfg.manifest = {"audio": {target: {"favourite": True}}}
+    hits = sum(
+        target in [a.path.name for a in build_selection(cfg, seed=s, template_name="warm-dawn").audio]
+        for s in range(15)
+    )
+    assert hits >= 14  # favourites rank right after freshness → picked almost always
