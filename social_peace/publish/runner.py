@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import threading
 from pathlib import Path
 
 from social_peace import ledger
@@ -24,6 +25,20 @@ PUBLISHERS = {
 # sidecar status values that mean "already live on this platform — don't re-post"
 DONE_STATUSES = ("uploaded", "published", "already-published")
 
+# The review UI runs "publish all approved" and per-video "publish" as background
+# threads in the same process, so two overlapping jobs (e.g. a slow youtube OAuth
+# prompt on one job while a second job is kicked off) can both pass the
+# already_published check before either has recorded a ledger entry, and both
+# post the same video twice. Serialize per (video_id, platform) so the second
+# caller blocks until the first finishes, then sees it's already published.
+_inflight_guard = threading.Lock()
+_inflight_locks: dict[tuple[str, str], threading.Lock] = {}
+
+
+def _lock_for(key: tuple[str, str]) -> threading.Lock:
+    with _inflight_guard:
+        return _inflight_locks.setdefault(key, threading.Lock())
+
 
 def target_platforms(cfg: Config) -> list[str]:
     return list(cfg.raw.get("project", {}).get("target_platforms", []))
@@ -38,24 +53,26 @@ def publish_one(cfg: Config, video_path: Path, platform: str) -> PublishResult:
     if platform not in PUBLISHERS:
         return PublishResult(platform, ok=False, status="error",
                              error=f"no publisher for {platform!r}")
-    if ledger.already_published(cfg.path("logs"), video_path.stem, platform):
-        log.info("%s already on %s, skipping", video_path.name, platform)
-        return PublishResult(platform, ok=True, status="already-published")
 
-    metadata = load_sidecar(video_path)
-    mod = importlib.import_module(PUBLISHERS[platform])
-    result = mod.publish(video_path, metadata)
-    ledger.record(
-        cfg.path("logs"), "publish",
-        video_id=video_path.stem, platform=platform,
-        status=result.status, url=result.url, remote_id=result.remote_id,
-        ok=result.ok, error=result.error,
-    )
-    if result.ok:
-        log.info("%s -> %s (%s)", platform, result.url or result.remote_id, result.status)
-    else:
-        log.error("%s publish failed: %s", platform, result.error)
-    return result
+    with _lock_for((video_path.stem, platform)):
+        if ledger.already_published(cfg.path("logs"), video_path.stem, platform):
+            log.info("%s already on %s, skipping", video_path.name, platform)
+            return PublishResult(platform, ok=True, status="already-published")
+
+        metadata = load_sidecar(video_path)
+        mod = importlib.import_module(PUBLISHERS[platform])
+        result = mod.publish(video_path, metadata)
+        ledger.record(
+            cfg.path("logs"), "publish",
+            video_id=video_path.stem, platform=platform,
+            status=result.status, url=result.url, remote_id=result.remote_id,
+            ok=result.ok, error=result.error,
+        )
+        if result.ok:
+            log.info("%s -> %s (%s)", platform, result.url or result.remote_id, result.status)
+        else:
+            log.error("%s publish failed: %s", platform, result.error)
+        return result
 
 
 def publish_sidecar(
