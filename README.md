@@ -1,11 +1,10 @@
 # social-peace
 
-Assembles calming, original short-form video (nature footage + ambient sound) and
-posts it on a schedule to YouTube Shorts — with TikTok and Instagram Reels to follow.
+In a world where social media feeds are increasingly filled with AI generated "slop", this program aims to generate more positive "slop"; to encourage more calming, nature filled content to appear in media feeds. Fighting fire with fire, this program assembles calming, original short-form videos (nature footage + ambient sounds) and posts it to YouTube Shorts and Instagram Reels upon user approval.
 
 **Content policy:** original or properly licensed assets only (Pixabay / Pexels /
 Coverr / your own). No scraping other creators, no fake engagement, no re-uploading
-third-party clips. See [assets/README.md](assets/README.md) for the licensing rules.
+third-party clips. See [assets/README.md](assets/README.md) for licensing rules.
 
 ---
 
@@ -114,7 +113,7 @@ ledger dedupe blocks a re-post even if you force it.
   pulls the video from a URL, so if `INSTAGRAM_PUBLIC_BASE_URL` is unset the
   publisher spins an ephemeral `cloudflared` quick tunnel over the render for the
   duration of the fetch, then tears it down (needs `cloudflared` on PATH).
-- **tiktok** — skeleton; add it to `target_platforms` once its `.env` block is set.
+- **tiktok** — skeleton WIP; add it to `target_platforms` once its `.env` block is set.
 
 **Captions:** the YouTube title/description and TikTok/Instagram captions are
 written fresh per video by Claude (`captions:` in `config.yaml`) — the existing
@@ -184,7 +183,7 @@ python -m social_peace run
 python -m social_peace ledger
 ```
 
-## Scheduling
+## Scheduling [WIP]
 
 **Linux / macOS** — `scripts/run_daily.sh [pipeline|publish-approved|all]`. Example
 `crontab -e` (render a batch at 09:00, post whatever you approved by 18:00):
@@ -194,8 +193,7 @@ python -m social_peace ledger
 0 18 * * *  /path/to/social-peace/scripts/run_daily.sh publish-approved >> /path/to/social-peace/logs/cron.log 2>&1
 ```
 
-**Windows** — `scripts/run_daily.ps1` still runs the older one-shot `run` (build +
-publish, no review gate):
+**Windows** — `scripts/run_daily.ps1` executes a complete `run` (build + publish, no review gate):
 
 ```powershell
 .\scripts\register_task.ps1 -Times "09:00","18:00"
