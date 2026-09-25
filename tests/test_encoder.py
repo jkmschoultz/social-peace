@@ -46,7 +46,7 @@ def test_build_retries_on_cpu_when_gpu_encode_fails(monkeypatch, tmp_path):
 
     runs = []
 
-    def fake_run(args, dry_run=False):
+    def fake_run(args, dry_run=False, **kw):
         enc = args[args.index("-c:v") + 1]
         runs.append(enc)
         if enc == "h264_nvenc":

@@ -71,6 +71,15 @@ render:
   crf: 19                         # libx264 quality (lower = better/bigger)
   preset: medium                  # libx264 speed/size trade-off
   # nvenc_cq: 21                  # NVENC quality (lower = better); defaults to crf + 2
+  # Don't overload the PC: renders (Generate, Fill queue, re-rolls, the nightly
+  # run) go one at a time machine-wide, each waiting until CPU use and free
+  # memory are back within these limits, and run at lower priority (nice).
+  nice: 10                        # 0 = normal priority, 19 = lowest
+  throttle:
+    max_cpu_percent: 85           # wait while the whole machine is busier than this
+    min_free_memory_gb: 4         # ...or has less memory free than this
+    check_seconds: 10
+    max_wait_minutes: 0           # 0 = wait as long as it takes
   keep_overlay_png: false         # keep the generated text PNG next to the mp4 for debugging
 
 paths:

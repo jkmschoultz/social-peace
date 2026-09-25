@@ -12,7 +12,7 @@ from social_peace.config import Config
 
 log = logging.getLogger(__name__)
 
-_EXTS = (".mp4", ".json", ".overlay.png")
+_EXTS = (".mp4", ".json", ".overlay.png", ".thumb.jpg")
 
 
 def _decided_at(md: dict, sidecar: Path) -> datetime:

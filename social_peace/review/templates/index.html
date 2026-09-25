@@ -54,7 +54,6 @@
   .pub-links a, .pub-out a { color:var(--go); }
   .pub-link:empty { display:none; }
   .pub-out { font-size:12px; color:var(--muted); white-space:pre-wrap; }
-  .var-row .var-btn { font-weight:600; }
   .var-pref { width:100%; margin-top:4px; font:12px/1.4 inherit; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); }
   .var-out { font-size:12px; color:var(--muted); }
   .var-out a { color:var(--go); }
@@ -65,6 +64,8 @@
   .q-row .q-slot { flex:1; }
   .q-row .q-slot b { color:var(--go); }
   .q-row button { flex:0 0 auto; padding:2px 8px; font-size:12px; }
+  .rj-row { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:12px; color:var(--muted); }
+  .rj-row label { display:inline-flex; align-items:center; gap:4px; margin:0; cursor:pointer; }
   .q-err { font-size:12px; color:var(--no); }
   header select { padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); font:inherit; }
   button.ghost { flex:0 0 auto; border:1px solid var(--line); color:var(--muted); }
@@ -134,7 +135,7 @@
   {% for v in videos %}
   <article class="card" data-stem="{{ v.id }}">
     {% if v._has_video %}
-    <video controls preload="metadata" src="/media/{{ v.id }}.mp4"></video>
+    <video controls preload="none" poster="/thumb/{{ v.id }}.jpg" src="/media/{{ v.id }}.mp4"></video>
     {% else %}
     <div class="meta" style="padding:12px 14px">⚠ mp4 missing</div>
     {% endif %}
@@ -169,16 +170,21 @@
       </details>
       <label>note (optional)</label>
       <textarea rows="1" class="note" placeholder="why approved / rejected">{{ v.review.note or '' }}</textarea>
+      {% set why = v.review.reasons or ([v.review.reason] if v.review.reason else []) %}
+      {% if v.review.state == 'rejected' and why %}
+      <div class="meta">rejected: {% for r in why %}{{ (reject_reasons.get(r) or {}).get('note', r) }}{{ '; ' if not loop.last }}{% endfor %}</div>
+      {% endif %}
+      <div class="rj-row" title="tick what's wrong: Reject re-rolls those parts into a replacement; ↻ Re-roll keeps this one and renders a variant with them changed">
+        {% for key, r in reject_reasons.items() %}
+          <label><input type="checkbox" class="rj-box" value="{{ key }}"> {{ r.button }}</label>
+        {% endfor %}
+      </div>
       <div class="row">
         <button class="ok" data-state="approved">Approve</button>
-        <button class="no" data-state="rejected">Reject</button>
+        <button class="no rj-go" data-state="rejected">Reject</button>
+        <button class="go var-go" title="keep this one; render a variant with the ticked parts changed">↻ Re-roll</button>
       </div>
-      <div class="row var-row">
-        <button class="var-btn" data-change="video">↻ clips</button>
-        <button class="var-btn" data-change="audio">↻ audio</button>
-        <button class="var-btn" data-change="text">↻ text</button>
-      </div>
-      <input class="var-pref" type="text" placeholder="prefer for ↻ clips/audio, e.g. river ambience (optional)">
+      <input class="var-pref" type="text" placeholder="prefer for new clips/audio, e.g. river ambience (optional)">
       <div class="var-out"></div>
 
       {% if v.id in sched.plan %}
@@ -311,33 +317,6 @@ async function decide(card, state) {
   }
 }
 
-async function variant(card, btn) {
-  const stem = card.dataset.stem;
-  const change = btn.dataset.change;
-  const prefEl = card.querySelector('.var-pref');
-  const prefer = prefEl ? prefEl.value.trim() : '';
-  const out = card.querySelector('.var-out');
-  card.querySelectorAll('.var-btn').forEach(b => b.disabled = true);
-  out.textContent = 'rendering a copy with new ' + change
-    + (prefer && change !== 'text' ? ' matching “' + prefer + '”' : '') + '… (~1 min)';
-  try {
-    const r = await fetch('/api/variant/' + encodeURIComponent(stem), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ change, prefer }),
-    });
-    const j = await r.json();
-    if (j.error) throw new Error(j.error);
-    const res = await pollJob(j.job_id);
-    out.innerHTML = 'new render (' + change + ' changed): <a href="?filter=pending">' + res.id + ' — in Pending</a>';
-    spRefreshGrid();
-  } catch (e) {
-    out.textContent = 'failed: ' + e.message;
-  } finally {
-    card.querySelectorAll('.var-btn').forEach(b => b.disabled = false);
-  }
-}
-
 async function regenCaptions(card, btn) {
   const out = card.querySelector('.cap-out');
   btn.disabled = true;
@@ -376,15 +355,104 @@ async function moveInQueue(card, to) {
   }
 }
 
+function ticked(card) {
+  return [...card.querySelectorAll('.rj-box:checked')].map(b => b.value);
+}
+
+function syncRejectLabel(card) {
+  const btn = card.querySelector('.rj-go');
+  if (btn) btn.textContent = ticked(card).length ? 'Reject & re-roll' : 'Reject';
+}
+
+// a queued re-roll finishes in the background; show where it landed
+async function followReroll(card, jobId, what) {
+  const out = card.querySelector('.var-out');
+  out.textContent = what + ' — queued (runs when earlier renders finish and the PC has room; see the status strip)';
+  if (window.spRefreshJobs) window.spRefreshJobs();
+  try {
+    const res = await pollJob(jobId);
+    out.innerHTML = 'new render (' + res.change.replace(/\+/g, ' + ') + ' changed): <a href="?filter=pending">'
+      + res.id + ' — in Pending</a>';
+    spRefreshGrid();
+  } catch (e) {
+    out.textContent = 're-roll failed: ' + e.message;
+  }
+}
+
+async function rejectFor(card, reasons) {
+  const stem = card.dataset.stem;
+  const out = card.querySelector('.var-out');
+  const btns = card.querySelectorAll('button[data-state], .var-go');
+  btns.forEach(b => b.disabled = true);
+  try {
+    const r = await fetch('/api/reject/' + encodeURIComponent(stem), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reasons, note: card.querySelector('.note').value }),
+    });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    const badge = card.querySelector('.state');
+    badge.textContent = 'rejected';
+    badge.className = 'state rejected';
+    card.style.opacity = 0.55;
+    card.querySelectorAll('.rj-box').forEach(b => b.checked = false);
+    syncRejectLabel(card);
+    btns.forEach(b => b.disabled = false);
+    followReroll(card, j.job_id, 'rejected (' + j.review.note + '); replacement');
+  } catch (e) {
+    out.textContent = 'failed: ' + e.message;
+    btns.forEach(b => b.disabled = false);
+  }
+}
+
+async function reroll(card) {
+  const reasons = ticked(card);
+  const out = card.querySelector('.var-out');
+  if (!reasons.length) { out.textContent = 'tick what to change first (text / clips / audio)'; return; }
+  const prefEl = card.querySelector('.var-pref');
+  try {
+    const r = await fetch('/api/variant/' + encodeURIComponent(card.dataset.stem), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reasons, prefer: prefEl ? prefEl.value.trim() : '' }),
+    });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    card.querySelectorAll('.rj-box').forEach(b => b.checked = false);
+    syncRejectLabel(card);
+    followReroll(card, j.job_id, 'variant');
+  } catch (e) {
+    out.textContent = 'failed: ' + e.message;
+  }
+}
+
+// Only the video being played holds a connection: starting one unloads the
+// others (browsers allow ~6 connections per site; parked videos would use
+// them up and freeze the page). Their poster frame stays.
+document.addEventListener('play', e => {
+  if (!(e.target instanceof HTMLMediaElement)) return;
+  document.querySelectorAll('video, audio').forEach(m => {
+    if (m === e.target || m.readyState === 0) return;
+    const src = m.getAttribute('src');
+    m.pause();
+    m.removeAttribute('src');
+    m.load();                      // aborts its download, frees the connection
+    m.setAttribute('src', src);    // preload="none": nothing fetched until played
+  });
+}, true);
+
 function bindCard(card) {
-  card.querySelectorAll('.q-btn').forEach(b =>
-    b.addEventListener('click', () => moveInQueue(card, b.dataset.to)));
   card.querySelectorAll('button[data-state]').forEach(b =>
-    b.addEventListener('click', () => decide(card, b.dataset.state)));
+    b.addEventListener('click', () => {
+      const reasons = ticked(card);
+      if (b.dataset.state === 'rejected' && reasons.length) rejectFor(card, reasons);
+      else decide(card, b.dataset.state);
+    }));
+  card.querySelectorAll('.rj-box').forEach(b =>
+    b.addEventListener('change', () => syncRejectLabel(card)));
+  const go = card.querySelector('.var-go');
+  if (go) go.addEventListener('click', () => reroll(card));
   card.querySelectorAll('.pub-btn').forEach(b =>
     b.addEventListener('click', () => publishPlatform(card, b)));
-  card.querySelectorAll('.var-btn').forEach(b =>
-    b.addEventListener('click', () => variant(card, b)));
   const cap = card.querySelector('.cap-btn');
   if (cap) cap.addEventListener('click', (e) => {
     e.preventDefault(); e.stopPropagation();

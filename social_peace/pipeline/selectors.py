@@ -9,6 +9,7 @@ from pathlib import Path
 
 from social_peace.config import Config
 from social_peace.pipeline.ffmpeg_utils import ffprobe_duration, has_audio_stream
+from social_peace.pipeline.recency import Recency
 
 log = logging.getLogger(__name__)
 
@@ -158,6 +159,7 @@ def build_selection(
     pin = pin or {}
     pref_a_tok = _pref_tokens(prefer_audio)
     pref_v_tok = _pref_tokens(prefer_video)
+    rec = Recency.load(cfg)
 
     # --- template ---
     if template_name:
@@ -184,6 +186,13 @@ def build_selection(
     stems = max(1, int(template.get("audio", {}).get("stems", 1)))
     wanted_a = list(template.get("audio", {}).get("tags", []))
     pinned_a = _resolve_pins(cfg.path("audio_assets"), pin["audio"], AUDIO_EXTS) if pin.get("audio") else None
+    # clips already fixed (an audio re-roll): the new bed should suit them
+    fixed_v = list(pin.get("video") or [])
+    clip_kw: set[str] = set()
+    for n in fixed_v:
+        clip_kw |= _keywords(cfg, "video", n)
+    bad_a = rec.mismatched_audio(fixed_v)
+    behind_a = rec.behind("audio", [p.name for p in audio_pool])
     if pinned_a is not None:
         a_ranked = pinned_a
         stems = len(pinned_a)
@@ -192,7 +201,10 @@ def build_selection(
             audio_pool,
             key=lambda p: (
                 p.name in used_audio,                                        # unused first
+                p.name in bad_a,                                             # rejected as a poor fit for these clips
+                p.name in behind_a,                                          # sent to the back of the queue
                 -len(_keywords(cfg, "audio", p.name) & pref_a_tok),          # user's wish
+                -len(_themed(_keywords(cfg, "audio", p.name)) & clip_kw),    # suits the fixed clips
                 not cfg.favourite("audio", p.name),                         # then favourites
                 p.name in soft_used_audio,                                   # avoid reusing accepted/published
                 -_tag_score(cfg, "audio", p, wanted_a),                     # template tag pref
@@ -231,6 +243,8 @@ def build_selection(
     seg = (target + (n - 1) * xdur) / n
 
     wanted_v = list(template.get("video_tags", []))
+    bad_v = rec.mismatched_clips([b.path.name for b in beds])
+    behind_v = rec.behind("video", [p.name for p in video_pool])
     if pinned_v is not None:
         candidates = pinned_v
     else:
@@ -238,6 +252,8 @@ def build_selection(
             video_pool,
             key=lambda p: (
                 p.name in used_video,                                     # unused first
+                p.name in bad_v,                                          # rejected as a poor fit for this audio
+                p.name in behind_v,                                       # sent to the back of the queue
                 -len(_keywords(cfg, "video", p.name) & pref_v_tok),       # user's wish
                 not cfg.favourite("video", p.name),                       # then favourites
                 p.name in soft_used_video,                                # avoid reusing accepted/published
@@ -291,7 +307,7 @@ def build_selection(
         pool = cfg.raw["overlay_text"]
         if exclude_text:
             pool = [t for t in pool if t != exclude_text] or pool
-        text = rng.choice(pool)
+        text = rec.pick_text(rng, pool)          # least recently used line
     footer = str(cfg.raw.get("overlay_footer", "") or "")
 
     sel = Selection(

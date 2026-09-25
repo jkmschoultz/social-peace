@@ -295,6 +295,20 @@ window.spOnJobDone = function (job) {
   if ((job.kind || '').indexOf('fetch') === 0) spRefreshAssets();
 };
 /* fetch clips / audio + generate + the job strip all live in _toolbar.html */
+
+// same as the review grid: playing one clip unloads the others so parked media
+// can't use up the browser's per-site connections
+document.addEventListener('play', e => {
+  if (!(e.target instanceof HTMLMediaElement)) return;
+  document.querySelectorAll('video, audio').forEach(m => {
+    if (m === e.target || m.readyState === 0) return;
+    const src = m.getAttribute('src');
+    m.pause();
+    m.removeAttribute('src');
+    m.load();
+    m.setAttribute('src', src);
+  });
+}, true);
 </script>
 </body>
 </html>

@@ -18,6 +18,14 @@ def _wait_job(client, job_id, tries=60):
     raise AssertionError("job did not finish")
 
 
+@pytest.fixture(autouse=True)
+def _idle_machine(monkeypatch):
+    """Renders wait while the real PC is busy (pipeline.throttle); tests shouldn't."""
+    from social_peace.pipeline import throttle
+    monkeypatch.setattr(throttle, "cpu_percent", lambda interval=1.0: 0.0)
+    monkeypatch.setattr(throttle, "free_memory_gb", lambda: 64.0)
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     cfg = Config.load()
