@@ -2,7 +2,7 @@
 it via that platform's official API.
 
 Status:
-  youtube   - skeleton in place (OAuth + resumable upload); needs your client secret
-  tiktok    - not started (Content Posting API)
-  instagram - not started (Instagram Graph API, Reels)
+  youtube   - live (OAuth + resumable upload)
+  tiktok    - Content Posting API Direct Post; one-time `social-peace tiktok-login`
+  instagram - live (Instagram Graph API, Reels, via a public URL / cloudflared tunnel)
 """

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<title>Sign-in Callback · Social Peace</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1 id="heading">Almost done</h1>
+  <p class="meta" id="lead">Copy this address and paste it into the terminal where
+  <code>social-peace tiktok-login</code> is waiting.</p>
+  <textarea id="url" readonly></textarea>
+  <button id="copy" type="button">Copy</button>
+  <p class="meta" style="margin-top:1.5rem">Nothing is sent or stored by this page.
+  The code works once and expires in a few minutes.</p>
+</main>
+<script>
+  const box = document.getElementById("url");
+  const params = new URLSearchParams(location.search);
+  box.value = location.href;
+  if (params.has("error")) {
+    document.getElementById("heading").textContent = "Sign-in was not completed";
+    const lead = document.getElementById("lead");
+    lead.className = "meta error";
+    lead.textContent = params.get("error") + (params.get("error_description") ? ": " + params.get("error_description") : "");
+  } else if (!params.has("code")) {
+    document.getElementById("lead").textContent = "No sign-in code in this address. Start again with social-peace tiktok-login.";
+  }
+  document.getElementById("copy").addEventListener("click", async () => {
+    box.select();
+    try { await navigator.clipboard.writeText(box.value); } catch { document.execCommand("copy"); }
+    document.getElementById("copy").textContent = "Copied";
+  });
+</script>
+</body>
+</html>

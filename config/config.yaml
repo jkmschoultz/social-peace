@@ -4,7 +4,7 @@
 project:
   # Platforms the review UI's Publish button, `run`, and `publish-approved` target.
   # youtube: live.  instagram: live via an ephemeral cloudflared tunnel (or
-  # INSTAGRAM_PUBLIC_BASE_URL).  tiktok: skeleton, add it here once its .env is set.
+  # INSTAGRAM_PUBLIC_BASE_URL).  tiktok: add it here after `social-peace tiktok-login`.
   target_platforms: [youtube, instagram]
   timezone: "Europe/Berlin"        # CET/CEST — schedule.slots are wall-clock times here
 

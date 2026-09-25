@@ -14,6 +14,7 @@
   social-peace captions-bank [--per-list N] # LLM-generate more caption/overlay lines into the bank
   social-peace prune   [--days N] [--all]  # delete rejected renders to free output/ space
   social-peace ledger  [--limit N]        # tail the posts.jsonl ledger
+  social-peace tiktok-login               # one-time TikTok OAuth consent; caches the tokens
 """
 from __future__ import annotations
 
@@ -317,6 +318,20 @@ def cmd_ledger(args: argparse.Namespace) -> int:
     return 0
 
 
+# -------------------------------------------------------------------- tiktok-login
+def cmd_tiktok_login(args: argparse.Namespace) -> int:
+    _bootstrap()  # loads .env before the module reads TIKTOK_TOKEN_FILE
+    from social_peace.publish import tiktok
+
+    try:
+        data = tiktok.login()
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"TikTok login OK — scopes: {data.get('scope')}; tokens saved to {tiktok._TOKEN_FILE}")
+    return 0
+
+
 # ----------------------------------------------------------------------------- arg
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="social-peace", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -397,6 +412,9 @@ def build_parser() -> argparse.ArgumentParser:
     lg = sub.add_parser("ledger", help="show recent ledger entries")
     lg.add_argument("--limit", type=int, default=20)
     lg.set_defaults(func=cmd_ledger)
+
+    tl = sub.add_parser("tiktok-login", help="one-time TikTok OAuth consent (caches the tokens)")
+    tl.set_defaults(func=cmd_tiktok_login)
     return p
 
 

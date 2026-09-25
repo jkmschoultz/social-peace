@@ -131,7 +131,9 @@ ledger dedupe blocks a re-post even if you force it.
   pulls the video from a URL, so if `INSTAGRAM_PUBLIC_BASE_URL` is unset the
   publisher spins an ephemeral `cloudflared` quick tunnel over the render for the
   duration of the fetch, then tears it down (needs `cloudflared` on PATH).
-- **tiktok** — skeleton WIP; add it to `target_platforms` once its `.env` block is set.
+- **tiktok** — Content Posting API (Direct Post). Fill the TikTok block in `.env`, run
+  `social-peace tiktok-login` once, then add it to `target_platforms`. Setup steps are in
+  `social_peace/publish/tiktok.py`; until the app is audited, posts are private-only.
 
 **Captions:** the YouTube title/description and TikTok/Instagram captions are
 written fresh per video by Claude (`captions:` in `config.yaml`) — the existing
@@ -288,7 +290,7 @@ The machine must be on at slot times (within `grace_minutes`).
 - [x] Assets page — list + preview + remove every clip/bed, filter by usage
 - [x] Favourite / rename assets; custom-query fetch from the UI
 - [x] Sort the review grid; `prune` rejected renders (30-day auto + button)
-- [x] TikTok Content Posting API publisher (skeleton — not yet run live)
+- [x] TikTok Content Posting API publisher + `tiktok-login` (not yet run live)
 - [x] Instagram Graph API (Reels) publisher + auto cloudflared tunnel for the fetch
 - [x] Posting queue + daily slots (`publish-due`), partial-failure retries, reorder in UI
 - [x] Adaptive `pipeline` batch that keeps the queue stocked
