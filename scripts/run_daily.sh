@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Scheduler entrypoint (Linux/macOS).
-#   pipeline     render enough new renders to keep the posting queue stocked (nightly)
+#   pipeline     render enough new renders to keep the posting queue stocked (evening, after the last slot)
 #   publish-due  post the queue head if a schedule.slots time has passed (every ~5 min)
 #   prune        drop old rejected renders
 # Review happens out of band, whenever you open `social-peace review`. The slot
@@ -9,7 +9,7 @@
 # systemd timers: scripts/systemd/ (preferred — Persistent= catches up after sleep).
 # crontab -e  equivalent:
 #   */5 * * * *  /path/to/social-peace/scripts/run_daily.sh publish-due >> /path/to/social-peace/logs/cron.log 2>&1
-#   0 2 * * *    /path/to/social-peace/scripts/run_daily.sh pipeline    >> /path/to/social-peace/logs/cron.log 2>&1
+#   5 19 * * *   /path/to/social-peace/scripts/run_daily.sh pipeline    >> /path/to/social-peace/logs/cron.log 2>&1
 # With no argument it runs pipeline + publish-due + prune in sequence.
 set -euo pipefail
 

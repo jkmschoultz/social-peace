@@ -1,8 +1,11 @@
 [Unit]
-Description=social-peace: nightly render batch for review
+Description=social-peace: evening render batch for review, after the 19:00 post
 
 [Timer]
-OnCalendar=*-*-* 02:00:00
+# Just after the day's last schedule.slots time (config.yaml). 5 minutes later
+# so the 19:00 publish-due tick has already started; the service's After= then
+# holds the render until that publish finishes. Move both if the slots change.
+OnCalendar=*-*-* 19:05:00
 Persistent=true
 
 [Install]

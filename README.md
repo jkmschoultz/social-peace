@@ -252,7 +252,7 @@ loginctl enable-linger "$USER"      # keep timers running while logged out
 
 ```cron
 */5 * * * *  /path/to/social-peace/scripts/run_daily.sh publish-due >> /path/to/social-peace/logs/cron.log 2>&1
-0 2 * * *    /path/to/social-peace/scripts/run_daily.sh pipeline    >> /path/to/social-peace/logs/cron.log 2>&1
+5 19 * * *   /path/to/social-peace/scripts/run_daily.sh pipeline    >> /path/to/social-peace/logs/cron.log 2>&1
 ```
 
 **Windows** — `scripts/run_daily.ps1` still executes a complete `run` (build +

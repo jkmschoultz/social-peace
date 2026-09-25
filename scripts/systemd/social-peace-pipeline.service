@@ -1,5 +1,7 @@
 [Unit]
 Description=social-peace: render enough new content to keep the posting queue stocked
+# If a publish-due run is still going (uploads can take minutes), wait for it.
+After=social-peace-publish.service
 
 [Service]
 Type=oneshot
