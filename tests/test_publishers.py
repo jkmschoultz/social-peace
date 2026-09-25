@@ -33,8 +33,8 @@ def test_tiktok_unconfigured_returns_error_result(tmp_path):
     vid.write_bytes(b"x" * 1024)
     res = tiktok.publish(vid, {"platforms": {"tiktok": {"caption": "hi", "privacy": "SELF_ONLY"}}})
     assert isinstance(res, PublishResult)
-    assert res.ok is False and res.status == "error"
-    assert "access token" in res.error.lower()
+    assert res.ok is False
+    assert res.status == "needs-login" and "access token" in res.error.lower()
 
 
 def test_tiktok_missing_sidecar_block(tmp_path):
@@ -201,3 +201,55 @@ def test_tiktok_rejects_disallowed_privacy(tmp_path, monkeypatch):
     vid.write_bytes(b"x")
     res = tiktok.publish(vid, {"platforms": {"tiktok": {"caption": "hi", "privacy": "PUBLIC_TO_EVERYONE"}}})
     assert res.ok is False and "not allowed" in res.error
+
+
+def _tt_app_env(tmp_path, monkeypatch):
+    monkeypatch.setattr(tiktok, "_TOKEN_FILE", tmp_path / "tok.json")
+    monkeypatch.setenv("TIKTOK_CLIENT_KEY", "k")
+    monkeypatch.setenv("TIKTOK_CLIENT_SECRET", "s")
+    monkeypatch.setenv("TIKTOK_REDIRECT_URI", "https://example.com/callback.html")
+
+
+def test_tiktok_start_and_finish_login(tmp_path, monkeypatch):
+    import json
+    from urllib.parse import parse_qs, urlparse
+
+    _tt_app_env(tmp_path, monkeypatch)
+    url = tiktok.start_login()
+    assert "redirect_uri=https%3A%2F%2Fexample.com%2Fcallback.html" in url
+    state = parse_qs(urlparse(url).query)["state"][0]
+
+    sent = {}
+
+    def fake_post(url, data=None, **_k):
+        sent.update(data)
+        return _TTResp({"access_token": "a", "refresh_token": "r", "expires_in": 86400,
+                        "scope": "user.info.basic,video.publish"})
+
+    monkeypatch.setattr(tiktok.requests, "post", fake_post)
+    with pytest.raises(RuntimeError, match="latest login"):
+        tiktok.finish_login("https://example.com/callback.html?code=x&state=forged")
+
+    data = tiktok.finish_login(f"https://example.com/callback.html?code=abc%2A1&state={state}")
+    assert sent["code"] == "abc*1" and sent["grant_type"] == "authorization_code"
+    assert data["access_token"] == "a"
+    assert json.loads((tmp_path / "tok.json").read_text())["refresh_token"] == "r"
+    with pytest.raises(RuntimeError, match="latest login"):  # a state is single-use
+        tiktok.finish_login(f"https://example.com/callback.html?code=abc&state={state}")
+
+
+def test_tiktok_revoked_refresh_token_reports_needs_login(tmp_path, monkeypatch):
+    import json
+    import time
+
+    tok = tmp_path / "tok.json"
+    tok.write_text(json.dumps({"access_token": "old", "refresh_token": "r", "expires_at": time.time() - 10}))
+    monkeypatch.setattr(tiktok, "_TOKEN_FILE", tok)
+    monkeypatch.setenv("TIKTOK_CLIENT_KEY", "k")
+    monkeypatch.setenv("TIKTOK_CLIENT_SECRET", "s")
+    monkeypatch.setattr(tiktok.requests, "post", lambda *a, **k: _TTResp(
+        {"error": "invalid_grant", "error_description": "revoked"}, status=400))
+    vid = tmp_path / "v.mp4"
+    vid.write_bytes(b"x")
+    res = tiktok.publish(vid, {"platforms": {"tiktok": {"caption": "hi"}}})
+    assert res.status == "needs-login" and "revoked" in res.error

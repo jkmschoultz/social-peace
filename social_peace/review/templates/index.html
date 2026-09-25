@@ -54,6 +54,9 @@
   .pub-links a, .pub-out a { color:var(--go); }
   .pub-link:empty { display:none; }
   .pub-out { font-size:12px; color:var(--muted); white-space:pre-wrap; }
+  .tt-login { display:flex; flex-direction:column; gap:6px; white-space:normal; }
+  .tt-login input { font:12px/1.4 inherit; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); }
+  .tt-login button { align-self:flex-start; }
   .var-pref { width:100%; margin-top:4px; font:12px/1.4 inherit; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); }
   .var-out { font-size:12px; color:var(--muted); }
   .var-out a { color:var(--go); }
@@ -279,6 +282,8 @@ async function publishPlatform(card, btn) {
       out.textContent = '';
       setLink(card, platform, res);
       if (DONE.includes(res.status)) { btn.dataset.done = '1'; btn.textContent = '✓ ' + platform; }
+    } else if (res && res.status === 'needs-login') {
+      showTiktokLogin(card, btn, res.error);
     } else {
       out.textContent = platform + ': FAILED — ' + ((res && res.error) || 'unknown');
     }
@@ -287,6 +292,61 @@ async function publishPlatform(card, btn) {
   } finally {
     lockButtons(card, false);
   }
+}
+
+// TikTok can't redirect back to this local server, so the login is two steps:
+// open TikTok's consent page, then paste the address of the callback page it
+// lands on (docs/callback.html). On success the publish is retried.
+async function showTiktokLogin(card, btn, why) {
+  const out = card.querySelector('.pub-out');
+  out.textContent = '';
+  const box = document.createElement('div');
+  box.className = 'tt-login';
+  const msg = document.createElement('div');
+  msg.textContent = 'tiktok: ' + (why || 'login needed');
+  const link = document.createElement('a');
+  link.textContent = '1. Log in to TikTok ↗';
+  link.target = '_blank';
+  link.rel = 'noreferrer';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = '2. Paste the address of the page you land on';
+  const go = document.createElement('button');
+  go.type = 'button';
+  go.className = 'go';
+  go.textContent = 'Log in & publish';
+  const status = document.createElement('div');
+  box.append(msg, link, input, go, status);
+  out.append(box);
+
+  try {
+    const j = await (await fetch('/api/tiktok/login')).json();
+    if (j.error) throw new Error(j.error);
+    link.href = j.url;
+  } catch (e) {
+    status.textContent = 'could not start login: ' + e.message;
+    link.removeAttribute('href');
+    input.disabled = go.disabled = true;
+    return;
+  }
+
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    status.textContent = 'logging in…';
+    try {
+      const r = await fetch('/api/tiktok/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ redirect: input.value }),
+      });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      publishPlatform(card, btn);
+    } catch (e) {
+      status.textContent = 'login failed: ' + e.message;
+      go.disabled = false;
+    }
+  });
 }
 
 async function decide(card, state) {

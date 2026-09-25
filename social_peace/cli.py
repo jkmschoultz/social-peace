@@ -14,7 +14,7 @@
   social-peace captions-bank [--per-list N] # LLM-generate more caption/overlay lines into the bank
   social-peace prune   [--days N] [--all]  # delete rejected renders to free output/ space
   social-peace ledger  [--limit N]        # tail the posts.jsonl ledger
-  social-peace tiktok-login               # one-time TikTok OAuth consent; caches the tokens
+  social-peace tiktok-login               # TikTok login: browser consent, paste the callback address
 """
 from __future__ import annotations
 
@@ -413,7 +413,7 @@ def build_parser() -> argparse.ArgumentParser:
     lg.add_argument("--limit", type=int, default=20)
     lg.set_defaults(func=cmd_ledger)
 
-    tl = sub.add_parser("tiktok-login", help="one-time TikTok OAuth consent (caches the tokens)")
+    tl = sub.add_parser("tiktok-login", help="TikTok login: browser consent, then paste the callback address")
     tl.set_defaults(func=cmd_tiktok_login)
     return p
 
