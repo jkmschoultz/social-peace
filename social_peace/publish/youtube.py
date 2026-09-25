@@ -37,6 +37,7 @@ def _clean(text: str) -> str:
 
 
 def _load_credentials():
+    from google.auth.exceptions import RefreshError
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -52,8 +53,14 @@ def _load_credentials():
     if creds and creds.valid:
         return creds
     if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-    else:
+        try:
+            creds.refresh(Request())
+        except RefreshError as exc:
+            # Testing-mode consent screens revoke refresh tokens after 7 days
+            # (invalid_grant) — fall through to a fresh consent flow.
+            log.warning("youtube refresh token rejected (%s) — re-running consent flow", exc)
+            creds = None
+    if not (creds and creds.valid):
         if not client_file.exists():
             raise FileNotFoundError(
                 f"{client_file} missing — download the OAuth client secret (see module docstring)"
