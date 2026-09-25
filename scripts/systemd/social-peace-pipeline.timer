@@ -1,0 +1,9 @@
+[Unit]
+Description=social-peace: nightly render batch for review
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

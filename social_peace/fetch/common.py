@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -93,6 +94,62 @@ def promote_incoming(asset_dir: Path) -> list[Path]:
         log.info("promote: %s -> %s", f.name, asset_dir.name)
         moved.append(dest)
     return moved
+
+
+def pick_rendition(files: list[dict], out_w: int, out_h: int) -> dict | None:
+    """The smallest rendition that still covers the output frame without
+    upscaling (the render scales to *cover* out_w x out_h, then centre-crops),
+    so a 4K upload is fetched as its 1080x1920 version when one exists. Falls
+    back to the largest rendition when none is big enough. `files` are dicts
+    with width / height."""
+    sized = [f for f in files if (f.get("width") or 0) and (f.get("height") or 0)]
+    if not sized:
+        return None
+    area = lambda f: f["width"] * f["height"]  # noqa: E731
+    covers = [f for f in sized if max(out_w / f["width"], out_h / f["height"]) <= 1.0]
+    return min(covers, key=area) if covers else max(sized, key=area)
+
+
+def output_size(cfg) -> tuple[int, int]:
+    w, h = cfg.render.get("resolution", [1080, 1920])
+    return int(w), int(h)
+
+
+_SEEN_FILE = ".fetched.json"
+_SEEN_LOCK = threading.Lock()
+
+
+def seen_ids(asset_dir: Path, source: str) -> set[str]:
+    """Stock ids from `source` this library already has or once had: every
+    `<source>-<id>-*` file in asset_dir / _incoming, plus the ids recorded at
+    download time in asset_dir/.fetched.json (so a clip you deleted from the
+    library is not fetched again). Fetchers skip these, so a search term that
+    comes round again in the rotation yields new results rather than the same
+    top hits under a new filename."""
+    ids: set[str] = set()
+    for d in (asset_dir, asset_dir / INCOMING_SUBDIR):
+        if d.is_dir():
+            ids |= {f.name.split("-")[1] for f in d.iterdir()
+                    if f.name.startswith(source + "-") and f.name.count("-") >= 2}
+    try:
+        ids |= set(json.loads((asset_dir / _SEEN_FILE).read_text(encoding="utf-8")).get(source, []))
+    except (FileNotFoundError, ValueError):
+        pass
+    return ids
+
+
+def mark_seen(asset_dir: Path, source: str, item_id) -> None:
+    with _SEEN_LOCK:
+        path = asset_dir / _SEEN_FILE
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            data = {}
+        ids = data.setdefault(source, [])
+        if str(item_id) not in ids:
+            ids.append(str(item_id))
+        asset_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=1), encoding="utf-8")
 
 
 def download(url: str, dest: Path, *, timeout: int = 60) -> bool:

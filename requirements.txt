@@ -3,6 +3,7 @@ PyYAML>=6.0
 Pillow>=10.2
 requests>=2.31
 python-dotenv>=1.0
+tzdata; sys_platform == 'win32'
 
 # YouTube publishing (used by social_peace/publish/youtube.py, wired up next)
 google-api-python-client>=2.100

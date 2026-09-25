@@ -6,16 +6,41 @@ project:
   # youtube: live.  instagram: live via an ephemeral cloudflared tunnel (or
   # INSTAGRAM_PUBLIC_BASE_URL).  tiktok: skeleton, add it here once its .env is set.
   target_platforms: [youtube, instagram]
-  timezone: "America/Los_Angeles"
+  timezone: "Europe/Berlin"        # CET/CEST — schedule.slots are wall-clock times here
+
+# Posting schedule. Approved renders form a queue (reorder it in the review UI);
+# at each slot the head of the queue goes out to target_platforms. A timer runs
+# `social-peace publish-due` every few minutes to fire the slots — see
+# scripts/systemd/. `social-peace schedule` shows what's queued for when.
+schedule:
+  enabled: true
+  slots: ["08:00", "12:30", "19:00"]
+  per_slot: 1              # renders posted per slot
+  grace_minutes: 90        # a slot noticed later than this (machine asleep) is skipped, not posted late
+  max_attempts: 3          # per platform; after that a failing render drops out of the queue
+  low_queue_days: 1.0      # review UI warns when the approved queue covers less than this
 
 # `social-peace pipeline`: scrape -> auto-promote -> render a batch for review.
 pipeline:
   fetch_sources: [pexels, pixabay]   # stock video sources to rotate through
   fetch_audio: true                  # also pull CC0 beds from Freesound (needs FREESOUND_API_KEY)
-  fetch_per_run: 6                    # items to request per source per run
-  min_clip_pool: 8                   # skip fetching when assets/video already has this many clips
+  # Before each render batch (nightly run + the UI's Generate button), fetch only
+  # when the library is short of clips / beds no pending, approved or published
+  # render uses: enough for the batch (~2.5 clips, ~1.5 beds per render), and at
+  # least min_unused_*. Search terms rotate through `queries` below, round-robin
+  # across runs; results the library already has (or had) are skipped.
+  min_unused_clips: 8
+  min_unused_audio: 4
+  fetch_per_run: 6                   # minimum items to request per source when fetching
+  max_fetch_per_source: 15           # cap per source per run
   auto_promote: true                 # move _incoming/ up into the render pool automatically
-  batch_size: 4                      # videos rendered per pipeline run
+  batch_size: 4                      # videos per manual "Generate" / fixed-size run
+  # Scheduled runs size the batch to keep the posting queue stocked:
+  # render enough that, at your recent approval rate, approved + pending covers
+  # target_queue_days of slots. `--batch N` overrides.
+  adaptive_batch: true
+  target_queue_days: 3
+  max_batch: 12                      # cap per run (render time adds up)
   queries:
     video:
       - "slow ocean waves"
@@ -38,8 +63,14 @@ render:
   audio_fade_in: 2.0
   audio_fade_out: 3.0
   loudness_lufs: -14.0            # integrated loudness target (typical for social)
+  # Video encoder: auto = use the GPU's hardware encoder (NVIDIA NVENC) when a
+  # test encode succeeds, else libx264 on the CPU. Or pin libx264 / h264_nvenc.
+  # Only the final encode moves to the GPU; the filters (scale, crossfade,
+  # zoom, overlay) always run on the CPU.
+  encoder: auto
   crf: 19                         # libx264 quality (lower = better/bigger)
-  preset: medium
+  preset: medium                  # libx264 speed/size trade-off
+  # nvenc_cq: 21                  # NVENC quality (lower = better); defaults to crf + 2
   keep_overlay_png: false         # keep the generated text PNG next to the mp4 for debugging
 
 paths:
@@ -150,7 +181,8 @@ fetch:
     # API key via PEXELS_API_KEY in .env
     default_query: "calm nature vertical"
     orientation: portrait
-    size: large
+    size: medium            # minimum upload size: large = 4K only, medium = Full HD+. The
+                            # fetcher then downloads the smallest rendition covering render.resolution
     per_page: 15
   freesound:
     # API token via FREESOUND_API_KEY in .env (https://freesound.org/apiv2/apply/)

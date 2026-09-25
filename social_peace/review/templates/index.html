@@ -58,6 +58,14 @@
   .var-pref { width:100%; margin-top:4px; font:12px/1.4 inherit; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); }
   .var-out { font-size:12px; color:var(--muted); }
   .var-out a { color:var(--go); }
+  .sched { flex:1 1 100%; font-size:12px; color:var(--muted); }
+  .sched b { color:var(--ink); font-weight:600; }
+  .sched.low, .sched .warn { color:var(--no); }
+  .q-row { display:flex; gap:6px; align-items:center; font-size:12px; color:var(--muted); }
+  .q-row .q-slot { flex:1; }
+  .q-row .q-slot b { color:var(--go); }
+  .q-row button { flex:0 0 auto; padding:2px 8px; font-size:12px; }
+  .q-err { font-size:12px; color:var(--no); }
   header select { padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); font:inherit; }
   button.ghost { flex:0 0 auto; border:1px solid var(--line); color:var(--muted); }
   #assetBackdrop { position:fixed; inset:0; background:rgba(0,0,0,.28); z-index:19; }
@@ -83,7 +91,7 @@
       <button class="no" id="pruneBtn">Empty rejected ({{ counts.rejected }})</button>
     {% endif %}
     {% if counts.approved %}
-      <button class="go" id="pubAll">Publish {{ counts.approved }} approved
+      <button class="go" id="pubAll" title="posts everything now, ignoring the schedule">Publish all {{ counts.approved }} now
         {%- if platforms %} → {{ platforms|join(', ') }}{% endif %}</button>
     {% endif %}
   </div>
@@ -94,6 +102,18 @@
       </select>
     </label>
     {% include "_toolbar.html" %}
+  </div>
+  <div class="sched {{ 'low' if sched.enabled and sched.low }}" id="schedLine">
+    {% if not sched.enabled %}
+      schedule <b>off</b> (schedule.enabled in config.yaml) · {{ sched.queue|length }} approved in the queue
+    {% else %}
+      next post <b>{{ fmt_slot(sched.next_slot) }}</b>
+      · slots {{ sched.slots|join(' / ') }} {{ sched.timezone }}
+      · <b>{{ sched.queue|length }}</b> queued ≈ {{ '%.1f'|format(sched.queue_days) }} day(s)
+      {%- if sched.queue %}, empty from {{ fmt_slot(sched.runs_out) }}{% endif %}
+      {% if sched.low %} · ⚠ queue running low — approve more{% endif %}
+      {% if sched.partial %} · {{ sched.partial|length }} retrying on missing platforms{% endif %}
+    {% endif %}
   </div>
 </header>
 
@@ -160,6 +180,21 @@
       </div>
       <input class="var-pref" type="text" placeholder="prefer for ↻ clips/audio, e.g. river ambience (optional)">
       <div class="var-out"></div>
+
+      {% if v.id in sched.plan %}
+      <div class="q-row">
+        <span class="q-slot">⏱ #{{ sched.queue.index(v.id) + 1 }} in queue —
+          {{ 'posts' if sched.enabled else 'would post' }} <b>{{ fmt_slot(sched.plan[v.id]) }}</b></span>
+        <button class="q-btn" data-to="top" title="post next">⤒</button>
+        <button class="q-btn" data-to="up" title="earlier">↑</button>
+        <button class="q-btn" data-to="down" title="later">↓</button>
+      </div>
+      {% elif v.id in partial %}
+      <div class="q-row">↻ retrying {{ partial[v.id]|join(', ') }} at {{ fmt_slot(sched.next_slot) }}</div>
+      {% endif %}
+      {% for p, err in ((v.schedule or {}).get('errors') or {}).items() if err %}
+      <div class="q-err">{{ p }} failed ({{ (v.schedule.attempts or {}).get(p, 0) }} attempt(s)): {{ err }}</div>
+      {% endfor %}
 
       {% if v.review.state == 'approved' and platforms %}
       <div class="row pub-row">
@@ -327,7 +362,23 @@ async function regenCaptions(card, btn) {
   }
 }
 
+async function moveInQueue(card, to) {
+  try {
+    const r = await fetch('/api/queue/' + encodeURIComponent(card.dataset.stem) + '/move', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to }),
+    });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    _gridBusy = 0;
+    spRefreshGrid();
+  } catch (e) {
+    alert('reorder failed: ' + e.message);
+  }
+}
+
 function bindCard(card) {
+  card.querySelectorAll('.q-btn').forEach(b =>
+    b.addEventListener('click', () => moveInQueue(card, b.dataset.to)));
   card.querySelectorAll('button[data-state]').forEach(b =>
     b.addEventListener('click', () => decide(card, b.dataset.state)));
   card.querySelectorAll('.pub-btn').forEach(b =>
@@ -353,7 +404,7 @@ async function spRefreshGrid() {
     const html = await (await fetch(location.href, { headers: { 'X-Requested-With': 'fetch' } })).text();
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const y = window.scrollY;
-    ['#grid', 'header nav'].forEach(sel => {
+    ['#grid', 'header nav', '#schedLine'].forEach(sel => {
       const fresh = doc.querySelector(sel), cur = document.querySelector(sel);
       if (fresh && cur) cur.replaceWith(fresh);
     });
@@ -424,7 +475,7 @@ if (pruneBtn) pruneBtn.addEventListener('click', async () => {
 
 const pubAll = document.getElementById('pubAll');
 if (pubAll) pubAll.addEventListener('click', async () => {
-  if (!confirm('Publish all approved videos now?')) return;
+  if (!confirm('Publish ALL approved videos right now, bypassing the posting schedule?')) return;
   pubAll.disabled = true;
   pubAll.textContent = 'publishing…';
   try {

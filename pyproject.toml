@@ -13,6 +13,7 @@ dependencies = [
     "requests>=2.31",
     "python-dotenv>=1.0",
     "Flask>=3.0",
+    "tzdata; sys_platform == 'win32'",   # zoneinfo has no system tz database on Windows
 ]
 
 [project.optional-dependencies]

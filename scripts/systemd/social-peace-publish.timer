@@ -1,0 +1,9 @@
+[Unit]
+Description=social-peace: check for due posting slots every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target

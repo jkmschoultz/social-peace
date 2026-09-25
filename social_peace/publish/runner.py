@@ -40,6 +40,20 @@ def _lock_for(key: tuple[str, str]) -> threading.Lock:
         return _inflight_locks.setdefault(key, threading.Lock())
 
 
+def done_platforms(md: dict) -> set[str]:
+    """Platforms this sidecar is already live on (a url/remote_id recorded, or a
+    done status)."""
+    pub = md.get("published") or {}
+    done = {p for p, i in pub.items() if (i or {}).get("url") or (i or {}).get("remote_id")}
+    done |= {p for p, s in (md.get("status") or {}).items() if s in DONE_STATUSES}
+    return done
+
+
+def is_published(md: dict) -> bool:
+    """Live on at least one platform."""
+    return bool(done_platforms(md))
+
+
 def target_platforms(cfg: Config) -> list[str]:
     return list(cfg.raw.get("project", {}).get("target_platforms", []))
 
@@ -121,13 +135,19 @@ def publish_sidecar(
 
 
 def iter_approved(cfg: Config):
+    """Approved sidecars still owed to at least one target platform, oldest
+    first. Fully-published ones are skipped so `--limit N` means N new posts."""
+    targets = set(available_platforms(cfg))
     for side in sorted(cfg.path("output").glob("*.json")):
         try:
             md = json.loads(side.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             continue
-        if md.get("review", {}).get("state") == "approved":
-            yield side
+        if md.get("review", {}).get("state") != "approved":
+            continue
+        if targets and targets <= done_platforms(md):
+            continue
+        yield side
 
 
 def publish_all_approved(

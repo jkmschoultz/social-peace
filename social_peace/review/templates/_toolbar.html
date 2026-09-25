@@ -2,6 +2,7 @@
 <button id="fetchVidBtn" class="tb">⬇ clips</button>
 <button id="fetchAudBtn" class="tb">⬇ audio</button>
 <button id="fetchCapBtn" class="tb">⬇ captions</button>
+<button id="fillBtn" class="tb" title="same as the nightly run: fetch clips/audio if the library is short, then render enough to keep the posting queue stocked">⟳ Fill queue</button>
 <button id="genBtn" class="go">+ Generate new content</button>
 <div id="jobStrip" class="jobstrip"></div>
 <script>
@@ -22,7 +23,12 @@
     const res = j.result || {};
     if (j.state === 'running') return '⏳ ' + j.label + '…';
     if (j.state === 'error') return '⚠ ' + j.label + ' — ' + (j.error || 'failed');
-    if (j.kind === 'generate') return '✓ generated ' + (res.count != null ? res.count : '?') + ' render(s)';
+    if (j.kind === 'generate') {
+      const got = res.fetched ? ' (fetched ' + res.fetched + ' new clips/beds)' : '';
+      if (res.plan && res.count === 0)
+        return '✓ queue already stocked (' + res.plan.queued + ' queued, ' + res.plan.pending + ' pending) — nothing to render';
+      return '✓ generated ' + (res.count != null ? res.count : '?') + ' render(s)' + got;
+    }
     if (j.kind === 'fetch-captions') return '✓ ' + j.label + ' — +' + (res.fetched || 0) + ' new lines';
     if ((j.kind || '').indexOf('fetch') === 0)
       return '✓ ' + j.label + ' — +' + (res.fetched || 0) + ' (pool ' + (res.pool_size != null ? res.pool_size : '?') + ')';
@@ -95,21 +101,26 @@
     }
   });
 
-  const gen = document.getElementById('genBtn');
-  if (gen) gen.addEventListener('click', async () => {
-    gen.disabled = true;
+  async function generate(btn, body) {
+    const btns = ['genBtn', 'fillBtn'].map(id => document.getElementById(id)).filter(Boolean);
+    btns.forEach(b => b.disabled = true);
     try {
       const r = await fetch('/api/generate', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       });
       const { job_id } = await r.json();
       refresh();
-      await pollJob(job_id);
-      location.href = '/?filter=pending';
+      const res = await pollJob(job_id);
+      if (res.count) { location.href = '/?filter=pending'; return; }
+      refresh();
     } catch (e) {
       alert('generate failed: ' + e.message);
-      gen.disabled = false;
     }
-  });
+    btns.forEach(b => b.disabled = false);
+  }
+  const gen = document.getElementById('genBtn');
+  if (gen) gen.addEventListener('click', () => generate(gen, {}));
+  const fill = document.getElementById('fillBtn');
+  if (fill) fill.addEventListener('click', () => generate(fill, { auto: true }));
 })();
 </script>
