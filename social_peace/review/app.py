@@ -560,7 +560,8 @@ def create_app(cfg: Config) -> Flask:
     @app.post("/api/reject/<stem>")
     def reject_reason(stem: str):
         """Reject for the ticked reason(s), then queue one re-roll with every
-        ticked part changed (see variant.reject_for)."""
+        ticked part changed (see variant.reject_for), steered by the optional
+        `prefer` wish like /api/variant."""
         from social_peace.pipeline.variant import changes_for, reject_for
 
         stem = _safe_stem(stem)
@@ -574,7 +575,8 @@ def create_app(cfg: Config) -> Flask:
         md = reject_for(cfg, sidecar, reasons, note=str(body.get("note", "")))
         ledger.record(log_dir, "review", video_id=stem, state="rejected",
                       reasons=reasons, note=md["review"]["note"], ok=True)
-        job = _queue_variant(stem, md, changes_for(reasons), reasons=reasons)
+        prefer = (body.get("prefer") or "").strip() or None
+        job = _queue_variant(stem, md, changes_for(reasons), prefer, reasons)
         return jsonify(job_id=job, review=md["review"])
 
     @app.post("/api/captions/<stem>")

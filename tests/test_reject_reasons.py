@@ -188,6 +188,18 @@ def test_reject_with_several_ticks_queues_one_combined_reroll(client, monkeypatc
     assert c.post(f"/api/reject/{side.stem}", json={"reasons": []}).status_code == 400
 
 
+def test_reject_passes_prefer_to_the_reroll(client, monkeypatch):
+    from conftest import _wait_job
+    c, side, _ = client
+    seen = {}
+    _fake_variant(monkeypatch, seen)
+    _with_sources(side)
+    r = c.post(f"/api/reject/{side.stem}",
+               json={"reasons": ["audio-mismatch"], "prefer": "  river ambience "})
+    _wait_job(c, r.get_json()["job_id"])
+    assert seen["change"] == ["audio"] and seen["prefer"] == "river ambience"
+
+
 def test_reroll_uses_ticks_without_rejecting(client, monkeypatch):
     from conftest import _wait_job
     c, side, logs = client
