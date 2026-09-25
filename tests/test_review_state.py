@@ -399,3 +399,22 @@ def test_thumbnail_is_made_once_and_cached(client, tmp_path, monkeypatch):
     assert len(calls) == 1
     assert c.get("/thumb/nope.jpg").status_code == 404
     assert 'preload="none" poster="/thumb/' in c.get("/").get_data(as_text=True)
+
+
+def test_tiktok_login_endpoints(client, monkeypatch):
+    c, _, _ = client
+    from social_peace.publish import tiktok
+
+    monkeypatch.setattr(tiktok, "start_login", lambda: "https://tiktok/auth?state=s")
+    assert c.get("/api/tiktok/login").get_json() == {"url": "https://tiktok/auth?state=s"}
+
+    def fake_finish(pasted):
+        if "code=" not in pasted:
+            raise RuntimeError("no code")
+        return {"scope": "video.publish"}
+
+    monkeypatch.setattr(tiktok, "finish_login", fake_finish)
+    ok = c.post("/api/tiktok/login", json={"redirect": "https://cb?code=1&state=s"})
+    assert ok.status_code == 200 and ok.get_json()["scope"] == "video.publish"
+    bad = c.post("/api/tiktok/login", json={"redirect": "nope"})
+    assert bad.status_code == 400 and "no code" in bad.get_json()["error"]

@@ -4,18 +4,19 @@ SETUP (before the first run):
   1. https://developers.tiktok.com -> create an app. Add the **Login Kit** and
      **Content Posting API** products; turn on "Direct Post" and request the
      `video.publish` scope (`user.info.basic` comes with Login Kit).
-  2. Login Kit -> Redirect URI: register one HTTPS URL, and put the same string in
-     TIKTOK_REDIRECT_URI. The page it points at does not need to do anything: after
-     consent the browser lands there with `?code=...` in the address bar, and
-     `social-peace tiktok-login` asks you to paste that address back in.
+  2. Login Kit -> Redirect URI: register docs/callback.html (served by GitHub Pages)
+     and put the same URL in TIKTOK_REDIRECT_URI. After consent that page shows the
+     address it was opened with (`?code=...&state=...`); paste it back into the
+     review UI (or `social-peace tiktok-login`) to finish the login.
   3. Sandbox: add the TikTok account you post to as a Target User. While the app
      is **unaudited**, every post is forced to `SELF_ONLY` and that account must be
      set to **private** in the TikTok app. Keep `metadata.tiktok.privacy` at
      `SELF_ONLY` until the app passes review.
-  4. Fill TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET / TIKTOK_REDIRECT_URI in .env, then
-     run `social-peace tiktok-login` once. Tokens are cached at TIKTOK_TOKEN_FILE:
-     the access token lasts 24 h and is refreshed automatically; the refresh token
-     lasts a year, after which you run `tiktok-login` again.
+  4. Fill TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET / TIKTOK_REDIRECT_URI in .env and
+     run `social-peace tiktok-login`. Tokens are cached at TIKTOK_TOKEN_FILE: the
+     access token lasts 24 h and is refreshed automatically. When there is no usable
+     refresh token (missing, a year old, or revoked) publish returns
+     status "needs-login", and the review UI offers the login right there.
 
 LIMITS: roughly 15 posts a day per account and 6 init calls a minute per token.
 
@@ -27,6 +28,7 @@ import json
 import logging
 import os
 import secrets as _secrets
+import threading
 import time
 import webbrowser
 from pathlib import Path
@@ -45,6 +47,9 @@ SCOPES = "user.info.basic,video.publish"
 _TOKEN_FILE = Path(os.environ.get("TIKTOK_TOKEN_FILE", "secrets/tiktok_token.json"))
 _POLL_TIMEOUT_S = 600
 _REFRESH_MARGIN_S = 900  # > _POLL_TIMEOUT_S, so the token can't lapse mid-post
+_LOGIN_TTL_S = 900  # how long a started login's state stays valid
+_pending_logins: dict[str, float] = {}  # state -> started at
+_pending_lock = threading.Lock()
 
 # Upload chunks: 5-64 MB each, the last one absorbs the remainder (up to 128 MB).
 # A file of 64 MB or less goes up in one piece.
@@ -56,6 +61,10 @@ class _TokenExpired(Exception):
     pass
 
 
+class _NeedsLogin(RuntimeError):
+    """No usable token or refresh token — only a browser login fixes it."""
+
+
 # ------------------------------------------------------------------------- tokens
 def _load_token() -> dict:
     if _TOKEN_FILE.is_file():
@@ -63,10 +72,7 @@ def _load_token() -> dict:
     # Bootstrap from .env (tokens made elsewhere, e.g. the TikTok OAuth playground).
     tok = os.environ.get("TIKTOK_ACCESS_TOKEN")
     if not tok:
-        raise RuntimeError(
-            "no TikTok access token — run `social-peace tiktok-login` "
-            "(or set TIKTOK_ACCESS_TOKEN in .env; see module docstring)"
-        )
+        raise _NeedsLogin("no TikTok access token")
     return {"access_token": tok, "refresh_token": os.environ.get("TIKTOK_REFRESH_TOKEN")}
 
 
@@ -100,6 +106,8 @@ def _oauth_token(form: dict) -> dict:
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
     data = resp.json() if resp.content else {}
+    if data.get("error") == "invalid_grant":  # refresh token revoked or expired
+        raise _NeedsLogin(f"tiktok token rejected: {data.get('error_description', 'invalid_grant')}")
     if not resp.ok or "access_token" not in data:
         raise RuntimeError(
             f"tiktok token request failed: {data.get('error') or resp.status_code} "
@@ -111,9 +119,9 @@ def _oauth_token(form: dict) -> dict:
 def _refresh(token: dict) -> dict:
     refresh = token.get("refresh_token")
     if not refresh:
-        raise RuntimeError("tiktok access token expired and no refresh token — run `social-peace tiktok-login`")
+        raise _NeedsLogin("tiktok access token expired and no refresh token")
     if token.get("refresh_expires_at") and token["refresh_expires_at"] < time.time():
-        raise RuntimeError("tiktok refresh token expired — run `social-peace tiktok-login`")
+        raise _NeedsLogin("tiktok refresh token expired")
     key, secret = _client_creds()
     log.info("tiktok: refreshing access token")
     data = _oauth_token({
@@ -151,11 +159,13 @@ def _redirect_uri() -> str:
 
 
 def parse_redirect(pasted: str, state: str) -> str:
-    """Pull the auth code out of the pasted redirect URL (or accept a bare code)."""
+    """Pull the auth code out of the redirect URL (or accept a bare code)."""
     pasted = pasted.strip()
-    if "code=" not in pasted:
-        return pasted
     qs = parse_qs(urlparse(pasted).query)
+    if "code" not in qs and "error" not in qs:
+        if "://" in pasted or "?" in pasted:
+            raise RuntimeError("tiktok consent: no code in the redirect URL")
+        return pasted
     if "error" in qs:
         raise RuntimeError(f"tiktok consent failed: {qs['error'][0]} {qs.get('error_description', [''])[0]}")
     if qs.get("state", [state])[0] != state:
@@ -163,19 +173,29 @@ def parse_redirect(pasted: str, state: str) -> str:
     return qs["code"][0]
 
 
-def login() -> dict:
-    """One-time browser consent. Saves and returns the token response."""
-    key, secret = _client_creds()
+def start_login() -> str:
+    """Begin a browser login: returns TikTok's consent URL. Finish with finish_login()."""
+    _client_creds()
     state = _secrets.token_urlsafe(16)
-    url = auth_url(state)
-    print("Open this URL, log in with the TikTok account to post to, and approve:\n")
-    print(f"  {url}\n")
-    try:
-        webbrowser.open(url)
-    except Exception:  # noqa: BLE001
-        pass
-    pasted = input("Paste the full URL you were redirected to: ")
-    code = parse_redirect(pasted, state)
+    now = time.time()
+    with _pending_lock:
+        for st, t in list(_pending_logins.items()):
+            if now - t > _LOGIN_TTL_S:
+                del _pending_logins[st]
+        _pending_logins[state] = now
+    return auth_url(state)
+
+
+def finish_login(pasted: str) -> dict:
+    """Exchange the code in the pasted callback URL. Saves and returns the token response."""
+    key, secret = _client_creds()
+    state = (parse_qs(urlparse(pasted.strip()).query).get("state") or [""])[0]
+    with _pending_lock:
+        started = _pending_logins.get(state)
+        if started is None or time.time() - started > _LOGIN_TTL_S:
+            raise RuntimeError("tiktok login: paste the full address from the latest login attempt")
+        code = parse_redirect(pasted, state)
+        del _pending_logins[state]
     data = _oauth_token({
         "client_key": key, "client_secret": secret, "code": code,
         "grant_type": "authorization_code", "redirect_uri": _redirect_uri(),
@@ -184,6 +204,17 @@ def login() -> dict:
     if "video.publish" not in granted:
         log.warning("tiktok: video.publish not granted (got %s) — posting will fail", data.get("scope"))
     return _save_token(data)
+
+
+def login() -> dict:
+    """Terminal login: open the consent page, read the pasted callback URL."""
+    url = start_login()
+    print(f"Log in with the TikTok account to post to (opening in your browser):\n\n  {url}\n")
+    try:
+        webbrowser.open(url)
+    except Exception:  # noqa: BLE001
+        pass
+    return finish_login(input("Paste the full address of the page you land on: "))
 
 
 # ---------------------------------------------------------------------------- api
@@ -304,18 +335,23 @@ def publish(video_path: Path, metadata: dict) -> PublishResult:
     if not tt:
         return PublishResult(platform, ok=False, status="error", error="no tiktok block in sidecar")
 
+    duration = metadata.get("duration_seconds")
     try:
         token = _valid_token()
         try:
-            return _post(token["access_token"], video_path, tt, metadata.get("duration_seconds"))
+            return _post(token["access_token"], video_path, tt, duration)
         except _TokenExpired:
             # Raised only by creator_info / init (before anything is uploaded);
             # _poll swallows it, so this retry can't double-post.
             token = _refresh(token)
-            return _post(token["access_token"], video_path, tt, metadata.get("duration_seconds"))
+            return _post(token["access_token"], video_path, tt, duration)
+    except _NeedsLogin as exc:
+        log.warning("tiktok: %s — log in again", exc)
+        return PublishResult(platform, ok=False, status="needs-login",
+                             error=f"{exc} — log in to TikTok again")
     except _TokenExpired as exc:
-        return PublishResult(platform, ok=False, status="error",
-                             error=f"tiktok token rejected after refresh ({exc}) — run `social-peace tiktok-login`")
+        return PublishResult(platform, ok=False, status="needs-login",
+                             error=f"tiktok token rejected right after refresh ({exc}) — log in to TikTok again")
     except RuntimeError as exc:
         log.error("tiktok: %s", exc)
         return PublishResult(platform, ok=False, status="error", error=str(exc))

@@ -603,6 +603,24 @@ def create_app(cfg: Config) -> Flask:
 
         return jsonify(job_id=_start_job("publish", work, label))
 
+    @app.get("/api/tiktok/login")
+    def tiktok_login_start():
+        from social_peace.publish import tiktok
+        try:
+            return jsonify(url=tiktok.start_login())
+        except RuntimeError as exc:
+            return jsonify(error=str(exc)), 400
+
+    @app.post("/api/tiktok/login")
+    def tiktok_login_finish():
+        from social_peace.publish import tiktok
+        pasted = (request.get_json(silent=True) or {}).get("redirect") or ""
+        try:
+            data = tiktok.finish_login(pasted)
+        except RuntimeError as exc:
+            return jsonify(error=str(exc)), 400
+        return jsonify(ok=True, scope=data.get("scope"))
+
     @app.post("/api/publish-approved")
     def publish_approved_all():
         def work():
