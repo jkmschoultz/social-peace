@@ -92,8 +92,8 @@ def test_publish_endpoint_runs_available_platforms(client, monkeypatch):
     j = _wait_job(c, c.post("/api/publish/20260101-000000_warm-dawn_1").get_json()["job_id"])
     body = j["result"]
     assert j["state"] == "done"
-    assert calls == ["youtube", "instagram"]  # config target_platforms
-    assert {res["platform"] for res in body["results"]} == {"youtube", "instagram"}
+    assert calls == ["youtube", "instagram", "tiktok"]  # config target_platforms
+    assert {res["platform"] for res in body["results"]} == {"youtube", "instagram", "tiktok"}
     assert all(res["ok"] and res["status"] == "uploaded" for res in body["results"])
     # status + per-platform url written back into the sidecar
     md = json.loads(side.read_text())

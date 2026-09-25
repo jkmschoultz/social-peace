@@ -4,8 +4,9 @@
 project:
   # Platforms the review UI's Publish button, `run`, and `publish-approved` target.
   # youtube: live.  instagram: live via an ephemeral cloudflared tunnel (or
-  # INSTAGRAM_PUBLIC_BASE_URL).  tiktok: add it here after `social-peace tiktok-login`.
-  target_platforms: [youtube, instagram]
+  # INSTAGRAM_PUBLIC_BASE_URL).  tiktok: live after `social-peace tiktok-login`;
+  # posts are SELF_ONLY until the app passes TikTok's audit (metadata.tiktok.privacy).
+  target_platforms: [youtube, instagram, tiktok]
   timezone: "Europe/Berlin"        # CET/CEST — schedule.slots are wall-clock times here
 
 # Posting schedule. Approved renders form a queue (reorder it in the review UI);
