@@ -105,3 +105,99 @@ def test_publish_one_reports_already_published(tmp_path, monkeypatch):
     res = runner.publish_one(cfg, tmp_path / "v.mp4", "youtube")
     assert res.ok and res.status == "already-published"
     assert res.status in runner.DONE_STATUSES
+
+
+# ------------------------------------------------------------------ tiktok, mocked
+class _TTResp:
+    def __init__(self, payload=None, status=200):
+        self._payload, self.status_code = payload, status
+        self.ok = status < 400
+        self.content = b"x"
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        if not self.ok:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+def _tt_ok(data):
+    return _TTResp({"data": data, "error": {"code": "ok"}})
+
+
+def test_tiktok_chunk_plan():
+    MB = 1024 * 1024
+    assert tiktok.chunk_plan(30 * MB) == (30 * MB, 1)
+    assert tiktok.chunk_plan(64 * MB) == (64 * MB, 1)
+    size, n = tiktok.chunk_plan(95 * MB)
+    assert (size, n) == (10 * MB, 9)          # last chunk carries the 15 MB tail
+
+
+def test_tiktok_parse_redirect():
+    url = "https://example.com/cb?code=abc%2A123&scopes=video.publish&state=s1"
+    assert tiktok.parse_redirect(url, "s1") == "abc*123"
+    assert tiktok.parse_redirect("  rawcode ", "s1") == "rawcode"
+    with pytest.raises(RuntimeError, match="state"):
+        tiktok.parse_redirect(url, "other")
+    with pytest.raises(RuntimeError, match="access_denied"):
+        tiktok.parse_redirect("https://example.com/cb?error=access_denied&code=", "s1")
+
+
+def test_tiktok_publish_flow_refreshes_expired_token(tmp_path, monkeypatch):
+    import json
+    import time
+
+    tok = tmp_path / "tok.json"
+    tok.write_text(json.dumps({"access_token": "old", "refresh_token": "r",
+                               "expires_at": time.time() - 10}))
+    monkeypatch.setattr(tiktok, "_TOKEN_FILE", tok)
+    monkeypatch.setenv("TIKTOK_CLIENT_KEY", "k")
+    monkeypatch.setenv("TIKTOK_CLIENT_SECRET", "s")
+    monkeypatch.setattr(tiktok.time, "sleep", lambda _s: None)
+
+    calls = []
+
+    def fake_post(url, headers=None, data=None, timeout=None):
+        calls.append(url.split("tiktokapis.com")[1])
+        if url.endswith("/oauth/token/"):
+            return _TTResp({"access_token": "new", "refresh_token": "r2", "expires_in": 86400})
+        assert headers["Authorization"] == "Bearer new"
+        if url.endswith("/creator_info/query/"):
+            return _tt_ok({"creator_username": "calm", "privacy_level_options": ["SELF_ONLY"],
+                        "max_video_post_duration_sec": 600})
+        if url.endswith("/video/init/"):
+            body = json.loads(data)
+            assert body["post_info"]["privacy_level"] == "SELF_ONLY"
+            assert body["source_info"]["total_chunk_count"] == 1
+            return _tt_ok({"publish_id": "p1", "upload_url": "https://up/1"})
+        if url.endswith("/status/fetch/"):
+            return _tt_ok({"status": "PUBLISH_COMPLETE"})
+        raise AssertionError(url)
+
+    puts = []
+    monkeypatch.setattr(tiktok.requests, "post", fake_post)
+    monkeypatch.setattr(tiktok.requests, "put",
+                        lambda url, headers, data, timeout: puts.append(headers) or _TTResp({}))
+
+    vid = tmp_path / "v.mp4"
+    vid.write_bytes(b"x" * 2048)
+    res = tiktok.publish(vid, {"duration_seconds": 40,
+                               "platforms": {"tiktok": {"caption": "hi", "privacy": "SELF_ONLY"}}})
+
+    assert res.ok, res.error
+    assert res.remote_id == "p1" and res.url == "https://www.tiktok.com/@calm"
+    assert calls[0] == "/v2/oauth/token/"
+    assert puts[0]["Content-Range"] == "bytes 0-2047/2048"
+    saved = json.loads(tok.read_text())
+    assert saved["access_token"] == "new" and saved["refresh_token"] == "r2" and "expires_at" in saved
+
+
+def test_tiktok_rejects_disallowed_privacy(tmp_path, monkeypatch):
+    monkeypatch.setenv("TIKTOK_ACCESS_TOKEN", "t")
+    monkeypatch.setattr(tiktok.requests, "post", lambda *a, **k: _tt_ok(
+        {"creator_username": "calm", "privacy_level_options": ["SELF_ONLY"]}))
+    vid = tmp_path / "v.mp4"
+    vid.write_bytes(b"x")
+    res = tiktok.publish(vid, {"platforms": {"tiktok": {"caption": "hi", "privacy": "PUBLIC_TO_EVERYONE"}}})
+    assert res.ok is False and "not allowed" in res.error
