@@ -138,15 +138,18 @@ metadata:
       - "{hook} 🌙 #shorts"
       - "{hook} — press pause 🍃 #shorts"
       - "{hook} #shorts #relax #nature"
+    # `metadata.hashtags` (below) is appended two lines under it.
     description: |
-      A short calming break — original ambient nature footage and sound.
-      No doom-scrolling here. Follow for a daily reset.
+      A short calming break. Original ambient nature footage and sound, no doom-scrolling here.
+      Follow for a daily reset.
     tags: [calm, relax, nature, ambient, mindfulness, breathe, shorts, lofi]
     category_id: "22"          # People & Blogs
     privacy: public            # NOTE: YouTube forces uploads to private + locks them
                                # while the OAuth consent screen is in "Testing" mode.
                                # Move it to "In production" for this to take effect.
     made_for_kids: false
+  # Appended to every YouTube description, and to Instagram captions minus
+  # #shorts (unless metadata.instagram.hashtags sets its own list).
   hashtags:
     - "#calm"
     - "#relax"
@@ -170,6 +173,7 @@ metadata:
     hashtags: ["#calm", "#relax", "#nature", "#breathe", "#fyp"]
     privacy: "SELF_ONLY"        # TikTok API value; start private, flip after review of the flow
   instagram:
+    # hashtags: [...]           # default: metadata.hashtags without #shorts
     caption_templates:
       - "{hook}\n\nfollow for a daily reset 🌿"
       - "{hook}"

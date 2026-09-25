@@ -37,6 +37,8 @@ def client(tmp_path, monkeypatch):
         d.mkdir()
     monkeypatch.setitem(cfg.raw["paths"], "output", str(out))
     monkeypatch.setitem(cfg.raw["paths"], "logs", str(logs))
+    # pinned so tests don't follow whatever config.yaml currently targets
+    monkeypatch.setitem(cfg.raw["project"], "target_platforms", ["youtube", "instagram", "tiktok"])
     # Config.path resolves against cfg.root; use absolute overrides instead.
     _paths = {"output": out, "logs": logs, "video_assets": vids, "audio_assets": auds}
     monkeypatch.setattr(cfg, "path", lambda k: _paths[k])
