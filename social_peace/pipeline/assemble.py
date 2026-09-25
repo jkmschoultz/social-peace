@@ -1,6 +1,7 @@
 """Turn a Selection into an ffmpeg command and render a 9:16 mp4."""
 from __future__ import annotations
 
+import contextlib
 import logging
 import random
 from datetime import datetime
@@ -11,6 +12,7 @@ from social_peace.pipeline.ffmpeg_utils import resolve_encoder, run_ffmpeg, vide
 from social_peace.pipeline.metadata import build_metadata, write_sidecar
 from social_peace.pipeline.overlays import render_overlay
 from social_peace.pipeline.selectors import Selection, build_selection
+from social_peace.pipeline.throttle import render_slot
 
 log = logging.getLogger(__name__)
 
@@ -192,15 +194,18 @@ def build_one(
         ]
 
     encoder = resolve_encoder(cfg.render)
-    try:
-        run_ffmpeg(_args(encoder), dry_run=dry_run)
-    except RuntimeError:
-        if encoder == "libx264":
-            raise
-        # e.g. consumer NVIDIA cards cap concurrent NVENC sessions — the review
-        # UI can have several renders going at once. Fall back to the CPU.
-        log.warning("%s encode failed, retrying with libx264", encoder)
-        run_ffmpeg(_args("libx264"), dry_run=dry_run)
+    nice = int(cfg.render.get("nice", 10))
+    # one render at a time machine-wide, and only when the PC has headroom
+    with contextlib.nullcontext() if dry_run else render_slot(cfg):
+        try:
+            run_ffmpeg(_args(encoder), dry_run=dry_run, nice=nice)
+        except RuntimeError:
+            if encoder == "libx264":
+                raise
+            # a hardware encode can fail (driver hiccup, NVENC session cap) —
+            # fall back to the CPU
+            log.warning("%s encode failed, retrying with libx264", encoder)
+            run_ffmpeg(_args("libx264"), dry_run=dry_run, nice=nice)
 
     if dry_run:
         overlay_png.unlink(missing_ok=True)

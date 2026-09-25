@@ -22,7 +22,7 @@ from social_peace.config import Config
 from social_peace.fetch.common import remove_manifest_entry, update_manifest_entry
 from social_peace.pipeline.metadata import REVIEW_STATES, set_review
 from social_peace.pipeline.selectors import AUDIO_EXTS, VIDEO_EXTS, _list_media
-from social_peace.pipeline.variant import CHANGEABLE
+from social_peace.pipeline.variant import CHANGEABLE, REJECT_REASONS
 from social_peace.publish import schedule
 from social_peace.publish.runner import (
     DONE_STATUSES,
@@ -64,7 +64,13 @@ def _start_job(kind: str, work, label: str = "") -> str:
             "state": "running", "started_at": time.time(),
         }
 
+    def _waiting(msg):
+        with _JOBS_LOCK:
+            _JOBS[job_id]["waiting"] = msg
+
     def _run():
+        from social_peace.pipeline.throttle import set_status_hook
+        set_status_hook(_waiting)       # render_slot reports "queued" / "waiting: CPU 96% busy"
         try:
             res = work()
             upd = {"state": "done", "result": res}
@@ -72,11 +78,60 @@ def _start_job(kind: str, work, label: str = "") -> str:
             log.exception("job %s (%s) failed", job_id, kind)
             upd = {"state": "error", "error": str(exc)}
         upd["finished_at"] = time.time()
+        upd["waiting"] = None
         with _JOBS_LOCK:
             _JOBS[job_id].update(upd)
 
     threading.Thread(target=_run, daemon=True).start()
     return job_id
+
+
+# Browsers open ~6 connections per site. A <video> asks for "bytes=0-", and
+# answering that with the whole file (tens of MB) pins a connection open while
+# the browser has stopped reading — a grid of tiles then exhausts the pool, and
+# further videos and the page's own API calls hang (black tiles, dead buttons).
+# Cap each range response; browsers just ask for the next piece as they play.
+_MEDIA_CHUNK = 2 * 1024 * 1024
+_RANGE_RE = re.compile(r"^bytes=(\d+)-(\d*)$")
+
+
+def _send_media(folder: Path, name: str):
+    m = _RANGE_RE.match(request.headers.get("Range", "").strip())
+    if m:
+        start, end = int(m.group(1)), m.group(2)
+        if not end or int(end) - start + 1 > _MEDIA_CHUNK:
+            request.environ["HTTP_RANGE"] = f"bytes={start}-{start + _MEDIA_CHUNK - 1}"
+    return send_from_directory(folder, name, conditional=True)
+
+
+_THUMB_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _thumbnail(output_dir: Path, stem: str) -> Path | None:
+    """<stem>.thumb.jpg — one small frame for the tile's poster, made on first
+    request (and again if the mp4 is newer)."""
+    mp4, jpg = output_dir / f"{stem}.mp4", output_dir / f"{stem}.thumb.jpg"
+    if not mp4.is_file():
+        return None
+    with _JOBS_LOCK:
+        lock = _THUMB_LOCKS.setdefault(stem, threading.Lock())
+    with lock:
+        if jpg.is_file() and jpg.stat().st_mtime >= mp4.stat().st_mtime:
+            return jpg
+        import subprocess
+        from social_peace.pipeline.ffmpeg_utils import _resolve_bin
+        tmp = jpg.with_suffix(".tmp.jpg")
+        proc = subprocess.run(
+            [_resolve_bin("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
+             "-ss", "1", "-i", str(mp4), "-frames:v", "1",
+             "-vf", "scale=360:-2", "-q:v", "5", str(tmp)],
+            capture_output=True, timeout=30,
+        )
+        if proc.returncode != 0 or not tmp.is_file():
+            tmp.unlink(missing_ok=True)
+            return None
+        tmp.replace(jpg)
+        return jpg
 
 
 def _safe_stem(stem: str) -> str:
@@ -320,6 +375,7 @@ def create_app(cfg: Config) -> Flask:
             counts=counts,
             platforms=available_platforms(cfg),
             done_statuses=list(DONE_STATUSES),
+            reject_reasons={k: {"button": v[1], "note": v[2]} for k, v in REJECT_REASONS.items()},
         )
 
     @app.get("/assets")
@@ -362,7 +418,7 @@ def create_app(cfg: Config) -> Flask:
         folder = cfg.path("video_assets" if kind == "video" else "audio_assets")
         if not (folder / name).is_file():
             abort(404)
-        return send_from_directory(folder, name, conditional=True)
+        return _send_media(folder, name)
 
     @app.post("/api/asset/<kind>/<name>/update")
     def asset_update(kind: str, name: str):
@@ -437,7 +493,17 @@ def create_app(cfg: Config) -> Flask:
         stem = _safe_stem(stem)
         if not (output_dir / f"{stem}.json").is_file():
             abort(404)
-        return send_from_directory(output_dir, f"{stem}.mp4", conditional=True)
+        return _send_media(output_dir, f"{stem}.mp4")
+
+    @app.get("/thumb/<stem>.jpg")
+    def thumb(stem: str):
+        stem = _safe_stem(stem)
+        if not (output_dir / f"{stem}.json").is_file():
+            abort(404)
+        jpg = _thumbnail(output_dir, stem)
+        if jpg is None:
+            abort(404)
+        return send_from_directory(output_dir, jpg.name, max_age=3600)
 
     @app.post("/api/decision/<stem>")
     def decision(stem: str):
@@ -460,6 +526,56 @@ def create_app(cfg: Config) -> Flask:
             video_id=stem, state=state, note=str(body.get("note", "")), ok=True,
         )
         return jsonify(ok=True, review=md["review"])
+
+    def _queue_variant(stem: str, md: dict, changes: list[str], prefer: str | None = None,
+                       reasons: list[str] | None = None) -> str:
+        """Render a variant of `md` with `changes` re-rolled, as a background job
+        (it waits its turn / for a quiet PC in pipeline.throttle)."""
+        from social_peace.pipeline.variant import make_variant
+
+        def work():
+            res = make_variant(cfg, md, changes, prefer=prefer)
+            ledger.record(
+                log_dir, "build", video_id=res["id"], template=res["template"],
+                seed=res["seed"], duration=res.get("duration"),
+                sources=res.get("sources"), variant_of=stem, variant_change="+".join(changes),
+                variant_prefer=prefer, reasons=reasons or None, ok=True,
+            )
+            return {"id": res["id"], "change": "+".join(changes), "variant_of": stem}
+
+        what = {"video": "clips", "audio": "audio", "text": "text"}
+        label = f"re-rolling {stem}: new {' + '.join(what[c] for c in changes)}"
+        if prefer and set(changes) & {"video", "audio"}:
+            label += f" matching “{prefer}”"
+        return _start_job("variant", work, label)
+
+    def _reasons(body: dict) -> list[str] | None:
+        """Ticked reasons from a request body (None if any are unknown)."""
+        raw = body.get("reasons")
+        if raw is None and body.get("reason"):
+            raw = [body["reason"]]
+        reasons = list(dict.fromkeys(raw or []))
+        return reasons if all(r in REJECT_REASONS for r in reasons) else None
+
+    @app.post("/api/reject/<stem>")
+    def reject_reason(stem: str):
+        """Reject for the ticked reason(s), then queue one re-roll with every
+        ticked part changed (see variant.reject_for)."""
+        from social_peace.pipeline.variant import changes_for, reject_for
+
+        stem = _safe_stem(stem)
+        sidecar = output_dir / f"{stem}.json"
+        if not sidecar.is_file():
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        reasons = _reasons(body)
+        if not reasons:
+            return jsonify(error=f"tick one or more of {list(REJECT_REASONS)}"), 400
+        md = reject_for(cfg, sidecar, reasons, note=str(body.get("note", "")))
+        ledger.record(log_dir, "review", video_id=stem, state="rejected",
+                      reasons=reasons, note=md["review"]["note"], ok=True)
+        job = _queue_variant(stem, md, changes_for(reasons), reasons=reasons)
+        return jsonify(job_id=job, review=md["review"])
 
     @app.post("/api/captions/<stem>")
     def api_captions(stem: str):
@@ -575,32 +691,30 @@ def create_app(cfg: Config) -> Flask:
 
     @app.post("/api/variant/<stem>")
     def api_variant(stem: str):
+        """Re-roll without rejecting. Body: `reasons` (ticked boxes — recorded,
+        and they pick what to change) and/or `change` (one or more of
+        video / audio / text), plus an optional `prefer` wish."""
+        from social_peace.pipeline.variant import changes_for, note_reasons
+
         stem = _safe_stem(stem)
         sidecar = output_dir / f"{stem}.json"
         if not sidecar.is_file():
             abort(404)
         body = request.get_json(silent=True) or {}
-        change = body.get("change")
-        if change not in CHANGEABLE:
-            return jsonify(error=f"change must be one of {list(CHANGEABLE)}"), 400
+        reasons = _reasons(body)
+        if reasons is None:
+            return jsonify(error=f"reasons must be from {list(REJECT_REASONS)}"), 400
+        change = body.get("change") or []
+        change = [change] if isinstance(change, str) else list(change)
+        if any(c not in CHANGEABLE for c in change):
+            return jsonify(error=f"change must be from {list(CHANGEABLE)}"), 400
+        changes = list(dict.fromkeys(change + (changes_for(reasons) if reasons else [])))
+        if not changes:
+            return jsonify(error="tick what to change (or send change)"), 400
         prefer = (body.get("prefer") or "").strip() or None
         original = json.loads(sidecar.read_text(encoding="utf-8"))
-
-        def work():
-            from social_peace.pipeline.variant import make_variant
-            res = make_variant(cfg, original, change, prefer=prefer)
-            ledger.record(
-                log_dir, "build", video_id=res["id"], template=res["template"],
-                seed=res["seed"], duration=res.get("duration"),
-                sources=res.get("sources"), variant_of=stem, variant_change=change,
-                variant_prefer=prefer, ok=True,
-            )
-            return {"id": res["id"], "change": change, "variant_of": stem}
-
-        label = f"rendering {stem} with new {change}"
-        if prefer and change != "text":
-            label += f" matching “{prefer}”"
-        return jsonify(job_id=_start_job("variant", work, label))
+        note_reasons(cfg, original, reasons)
+        return jsonify(job_id=_queue_variant(stem, original, changes, prefer, reasons))
 
     @app.get("/api/jobs/<job_id>")
     def api_job(job_id: str):

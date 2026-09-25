@@ -50,8 +50,11 @@ def has_audio_stream(path: str | Path) -> bool:
     return any(s.get("codec_type") == "audio" for s in ffprobe_streams(path))
 
 
-def run_ffmpeg(args: list[str], *, dry_run: bool = False) -> None:
+def run_ffmpeg(args: list[str], *, dry_run: bool = False, nice: int = 0) -> None:
+    """`nice` > 0 runs ffmpeg at lower CPU priority so other programs stay responsive."""
     cmd = [_resolve_bin("ffmpeg"), "-hide_banner", "-y", *args]
+    if nice and not dry_run and shutil.which("nice"):
+        cmd = ["nice", "-n", str(int(nice)), *cmd]
     printable = " ".join(shlex.quote(c) for c in cmd)
     if dry_run:
         log.info("[dry-run] %s", printable)

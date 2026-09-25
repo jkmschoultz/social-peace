@@ -150,7 +150,7 @@ def test_variant_endpoint_runs_job(client, monkeypatch):
     monkeypatch.setattr(
         vmod, "make_variant",
         lambda cfg, orig, change, **kw: {
-            "id": "NEW_" + change, "template": orig["template"], "seed": orig["seed"],
+            "id": "NEW_" + "+".join(change), "template": orig["template"], "seed": orig["seed"],
             "sources": {"video": [], "audio": []}, "duration": 10,
         },
     )
@@ -359,3 +359,43 @@ def test_approved_tab_shows_queue_and_reorders(client, tmp_path):
     assert r.get_json()["queue"] == [stem2, "20260101-000000_warm-dawn_1"]
     assert c.get("/api/schedule").get_json()["queue"][0] == stem2
     assert c.post(f"/api/queue/{stem2}/move", json={"to": "sideways"}).status_code == 400
+
+
+def test_media_ranges_are_capped_so_tiles_cant_pin_connections(client, tmp_path):
+    from social_peace.review import app as appmod
+    c, side, _ = client
+    stem = side.stem
+    size = appmod._MEDIA_CHUNK * 3 + 123
+    (tmp_path / "output" / f"{stem}.mp4").write_bytes(b"\0" * size)
+
+    r = c.get(f"/media/{stem}.mp4", headers={"Range": "bytes=0-"})
+    assert r.status_code == 206
+    assert len(r.data) == appmod._MEDIA_CHUNK
+    assert r.headers["Content-Range"] == f"bytes 0-{appmod._MEDIA_CHUNK - 1}/{size}"
+    # the browser's follow-up request continues where it left off
+    r = c.get(f"/media/{stem}.mp4", headers={"Range": f"bytes={size - 100}-"})
+    assert r.status_code == 206 and len(r.data) == 100
+    # small explicit ranges are served as asked
+    r = c.get(f"/media/{stem}.mp4", headers={"Range": "bytes=10-19"})
+    assert len(r.data) == 10
+
+
+def test_thumbnail_is_made_once_and_cached(client, tmp_path, monkeypatch):
+    import subprocess
+    c, side, _ = client
+    stem = side.stem
+    (tmp_path / "output" / f"{stem}.mp4").write_bytes(b"x")
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        open(cmd[-1], "wb").write(b"\xff\xd8jpeg")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    for _ in range(2):
+        r = c.get(f"/thumb/{stem}.jpg")
+        assert r.status_code == 200 and r.data == b"\xff\xd8jpeg"
+    assert len(calls) == 1
+    assert c.get("/thumb/nope.jpg").status_code == 404
+    assert 'preload="none" poster="/thumb/' in c.get("/").get_data(as_text=True)

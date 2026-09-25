@@ -43,9 +43,10 @@ python -m social_peace pipeline --no-fetch     # just render from the current as
 #    edit captions, Approve / Reject, then Publish (published renders move to the
 #    published tab). Header buttons: "+ Generate new content" (render another
 #    batch), "Fetch clips" / "Fetch audio" (top up the asset library for future
-#    runs). Every card has "↻ clips / ↻ audio / ↻ text" to re-render it with one
-#    thing swapped, with a "prefer …" box to bias the re-roll toward assets
-#    matching a scene/sound wish ("river ambience"); the re-roll also leans away
+#    runs). Every card has tick boxes for what's wrong (see below) and a
+#    "↻ Re-roll" button that keeps the render and queues a variant with the
+#    ticked parts changed, with a "prefer …" box to bias new clips / audio
+#    toward a scene/sound wish ("river ambience"); the re-roll also leans away
 #    from assets already used by accepted/published renders (below "prefer" in
 #    priority). Sort dropdown (newest / oldest / seed / template / status).
 #    Header right side: sort · custom-query box · fetch clips · fetch audio ·
@@ -64,6 +65,16 @@ python -m social_peace pipeline --no-fetch     # just render from the current as
 #    video-only / audio-only), and a custom-query fetch bar. Open it as its own
 #    page ("assets ↗") or as a right-side drawer ("assets ▸") without leaving the
 #    grid. The rejected tab has an "Empty rejected" button.
+#    Tick boxes: text overused / clips overused / audio overused / audio doesn't
+#    fit. With any ticked, Reject becomes "Reject & re-roll": it rejects and
+#    queues one replacement with every ticked part changed (lands in pending);
+#    ↻ Re-roll does the same without rejecting. Either way the ticks are acted on:
+#      text / clips / audio overused — sends that line,
+#        those clips or those beds to the back of their queue: they aren't
+#        picked again until everything else in the pool has been used since
+#      audio doesn't fit — new audio chosen to suit the clips' scene, and the
+#        pairing is remembered so that bed isn't put on those clips again
+#    (logs/demoted.json). On-screen text rotates least-recently-used.
 python -m social_peace review                  # http://127.0.0.1:8756
 
 # reclaim output/ space — drop rejected renders (cron this; the review server
@@ -71,7 +82,7 @@ python -m social_peace review                  # http://127.0.0.1:8756
 python -m social_peace prune                    # older than 30 days
 python -m social_peace prune --all              # every rejected render
 
-# re-render one video with a single dimension re-picked (CLI equivalent of ↻)
+# re-render one video with one dimension re-picked (CLI equivalent of ↻ Re-roll)
 python -m social_peace variant <stem> --change audio
 
 # grow the caption pool: Claude writes new overlay / title / caption template

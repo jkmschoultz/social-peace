@@ -21,7 +21,8 @@
   const strip = document.getElementById('jobStrip');
   function line(j) {
     const res = j.result || {};
-    if (j.state === 'running') return '⏳ ' + j.label + '…';
+    if (j.state === 'running')
+      return j.waiting ? '⏸ ' + j.label + ' — ' + j.waiting : '⏳ ' + j.label + '…';
     if (j.state === 'error') return '⚠ ' + j.label + ' — ' + (j.error || 'failed');
     if (j.kind === 'generate') {
       const got = res.fetched ? ' (fetched ' + res.fetched + ' new clips/beds)' : '';

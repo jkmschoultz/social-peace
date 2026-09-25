@@ -19,6 +19,16 @@ _enough = len(_pool_v) >= 6 and len(_pool_a) >= 4
 pytestmark = pytest.mark.skipif(not _enough, reason="needs a local asset library (>=6 clips, >=4 beds)")
 
 
+@pytest.fixture(autouse=True)
+def _no_review_history(monkeypatch):
+    """These use the real asset library; keep the real review history (recent
+    use, demotions, mismatches in logs/) out of the ranking under test."""
+    from social_peace.pipeline import selectors
+    from social_peace.pipeline.recency import KINDS, Recency
+    monkeypatch.setattr(selectors.Recency, "load", classmethod(
+        lambda cls, cfg: Recency({k: {} for k in KINDS}, {k: {} for k in KINDS}, [])))
+
+
 def test_second_render_avoids_first_renders_assets():
     cfg = Config.load()
     s1 = build_selection(cfg, seed=101, template_name="warm-dawn")
