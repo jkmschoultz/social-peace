@@ -64,3 +64,24 @@ def test_set_review_and_mark_status(tmp_path):
 
     mark_status(side, "youtube", "uploaded")
     assert json.loads(side.read_text(encoding="utf-8"))["status"]["youtube"] == "uploaded"
+
+
+def _template_cfg(monkeypatch):
+    cfg = Config.load()
+    monkeypatch.setitem(cfg.raw["captions"], "enabled", False)  # template path, no API
+    return cfg
+
+
+def test_instagram_gets_youtube_hashtags_minus_shorts(monkeypatch):
+    cfg = _template_cfg(monkeypatch)
+    md = build_metadata(cfg, _sel(3), Path("/tmp/o/x_warm-dawn_3.mp4"))
+    tags = [t for t in cfg.raw["metadata"]["hashtags"] if t.lower() != "#shorts"]
+    ig = md["platforms"]["instagram"]
+    assert ig["caption"].endswith("\n\n" + " ".join(tags))
+    assert "#shorts" not in ig["caption"] and ig["hashtags"] == tags
+    assert md["platforms"]["youtube"]["description"].endswith(" ".join(cfg.raw["metadata"]["hashtags"]))
+
+    monkeypatch.setitem(cfg.raw["metadata"]["instagram"], "hashtags", ["#own"])
+    md = build_metadata(cfg, _sel(3), Path("/tmp/o/x_warm-dawn_3.mp4"))
+    assert md["platforms"]["instagram"]["caption"].endswith("\n\n#own")
+

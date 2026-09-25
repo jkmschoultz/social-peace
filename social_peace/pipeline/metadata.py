@@ -36,6 +36,14 @@ def _caption_body(rng: random.Random, block: dict, hook: str) -> str:
     return rng.choice(templates).format(hook=hook)
 
 
+def _instagram_hashtags(md: dict) -> list[str]:
+    """metadata.instagram.hashtags if set, else the YouTube list minus #shorts."""
+    ig = md.get("instagram", {})
+    if "hashtags" in ig:
+        return list(ig["hashtags"] or [])
+    return [t for t in md.get("hashtags", []) if t.lower() != "#shorts"]
+
+
 def build_metadata(cfg: Config, sel: Selection, video_path: Path) -> dict:
     rng = random.Random(sel.seed ^ 0xA5A5A5)
     md = cfg.raw["metadata"]
@@ -43,6 +51,7 @@ def build_metadata(cfg: Config, sel: Selection, video_path: Path) -> dict:
     tiktok = md.get("tiktok", {})
     instagram = md.get("instagram", {})
     hashtags = list(md.get("hashtags", []))
+    ig_hashtags = _instagram_hashtags(md)
 
     hook = _hook_from_text(sel.text)
 
@@ -91,8 +100,8 @@ def build_metadata(cfg: Config, sel: Selection, video_path: Path) -> dict:
                 "privacy": tiktok.get("privacy", "SELF_ONLY"),
             },
             "instagram": {
-                "caption": _with_hashtags(instagram_body, instagram.get("hashtags", []))[:2200],
-                "hashtags": list(instagram.get("hashtags", [])),
+                "caption": _with_hashtags(instagram_body, ig_hashtags)[:2200],
+                "hashtags": ig_hashtags,
             },
         },
         "status": {"youtube": "pending", "instagram": "pending", "tiktok": "skipped"},
@@ -160,7 +169,7 @@ def regenerate_captions(cfg: Config, sidecar_path: Path) -> dict:
     plats.setdefault("youtube", {})["title"] = title[:100]
     plats["youtube"]["description"] = _with_hashtags(description, hashtags)[:4900]
     plats.setdefault("tiktok", {})["caption"] = _with_hashtags(tt_body, tiktok.get("hashtags", []))[:2200]
-    plats.setdefault("instagram", {})["caption"] = _with_hashtags(ig_body, instagram.get("hashtags", []))[:2200]
+    plats.setdefault("instagram", {})["caption"] = _with_hashtags(ig_body, _instagram_hashtags(m))[:2200]
     _write(sidecar_path, md)
     return {
         "source": source,
