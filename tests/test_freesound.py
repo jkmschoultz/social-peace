@@ -5,6 +5,8 @@ from social_peace.fetch import freesound
 
 
 class _Resp:
+    status_code = 200
+
     def __init__(self, payload):
         self._payload = payload
 
@@ -71,6 +73,12 @@ def test_fetch_downloads_preview_and_writes_manifest(tmp_path, monkeypatch):
 
     assert len(saved) == 1
     assert calls[0][0] == "https://cdn/111-hq.mp3"
+    # the id is remembered: a repeat of the same query (the rotation coming
+    # round) skips it even after the file has been promoted or deleted
+    for f in (audio_dir / "_incoming").iterdir():
+        f.unlink()
+    calls.clear()
+    assert freesound.fetch(cfg, "rain again", limit=5) == [] and calls == []
     data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
     entry = data["audio"]["freesound-111-rain.mp3"]
     assert entry["license"] == "CC0"

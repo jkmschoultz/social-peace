@@ -23,9 +23,11 @@ from social_peace.fetch.common import remove_manifest_entry, update_manifest_ent
 from social_peace.pipeline.metadata import REVIEW_STATES, set_review
 from social_peace.pipeline.selectors import AUDIO_EXTS, VIDEO_EXTS, _list_media
 from social_peace.pipeline.variant import CHANGEABLE
+from social_peace.publish import schedule
 from social_peace.publish.runner import (
     DONE_STATUSES,
     available_platforms,
+    is_published,
     publish_all_approved,
     publish_sidecar,
 )
@@ -198,18 +200,11 @@ def _load_all(cfg: Config, output_dir: Path) -> list[dict]:
     return rows
 
 
-def _is_published(md: dict) -> bool:
-    pub = md.get("published") or {}
-    if any((i or {}).get("url") or (i or {}).get("remote_id") for i in pub.values()):
-        return True
-    return any(s in DONE_STATUSES for s in (md.get("status") or {}).values())
-
-
 def _effective_state(md: dict) -> str:
     """review.state, except an approved render that has gone live on >=1 platform
     reports as 'published' so it moves to its own tab."""
     state = md.get("review", {}).get("state", "pending")
-    if state == "approved" and _is_published(md):
+    if state == "approved" and is_published(md):
         return "published"
     return state
 
@@ -220,11 +215,14 @@ def _filtered(rows: list[dict], filt: str) -> list[dict]:
     return [r for r in rows if _effective_state(r) == filt]
 
 
-_SORTS = ("newest", "oldest", "seed", "template", "status")
+_SORTS = ("queue", "newest", "oldest", "seed", "template", "status")
 _STATE_ORDER = {"pending": 0, "approved": 1, "published": 2, "rejected": 3}
 
 
-def _sorted(rows: list[dict], sort: str) -> list[dict]:
+def _sorted(rows: list[dict], sort: str, queue: list[str] | None = None) -> list[dict]:
+    if sort == "queue":
+        pos = {stem: i for i, stem in enumerate(queue or [])}
+        return sorted(rows, key=lambda r: (pos.get(r["id"], len(pos)), r["id"]))
     if sort == "oldest":
         return sorted(rows, key=lambda r: r["id"])
     if sort == "seed":
@@ -302,15 +300,20 @@ def create_app(cfg: Config) -> Flask:
         filt = request.args.get("filter", "pending")
         if filt not in _FILTERS:
             filt = "pending"
-        sort = request.args.get("sort", "newest")
+        # the approved tab is the posting queue — show it in posting order
+        sort = request.args.get("sort", "queue" if filt == "approved" else "newest")
         if sort not in _SORTS:
             sort = "newest"
         rows = _load_all(cfg, output_dir)
         counts = {s: len(_filtered(rows, s)) for s in _TABS}
         counts["all"] = len(rows)
+        sched = schedule.status(cfg)
         return render_template(
             "index.html",
-            videos=_sorted(_filtered(rows, filt), sort),
+            videos=_sorted(_filtered(rows, filt), sort, sched["queue"]),
+            sched=sched,
+            partial=dict(sched["partial"]),
+            fmt_slot=schedule.fmt_slot,
             filt=filt,
             sort=sort,
             sorts=list(_SORTS),
@@ -491,18 +494,50 @@ def create_app(cfg: Config) -> Flask:
 
         return jsonify(job_id=_start_job("publish", work, "publishing all approved"))
 
+    @app.post("/api/queue/<stem>/move")
+    def queue_move(stem: str):
+        stem = _safe_stem(stem)
+        to = (request.get_json(silent=True) or {}).get("to")
+        if to not in ("top", "up", "down", "bottom"):
+            return jsonify(error="to must be top / up / down / bottom"), 400
+        try:
+            order = schedule.move(cfg, stem, to)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        return jsonify(ok=True, queue=order)
+
+    @app.get("/api/schedule")
+    def api_schedule():
+        st = schedule.status(cfg)
+        return jsonify(
+            enabled=st["enabled"], timezone=st["timezone"], slots=st["slots"],
+            posts_per_day=st["posts_per_day"], queue=st["queue"], low=st["low"],
+            queue_days=round(st["queue_days"], 2),
+            next_slot=st["next_slot"].isoformat() if st["next_slot"] else None,
+            runs_out=st["runs_out"].isoformat() if st["runs_out"] else None,
+            plan={k: v.isoformat() for k, v in st["plan"].items()},
+            partial=st["partial"],
+        )
+
     @app.post("/api/generate")
     def api_generate():
         body = request.get_json(silent=True) or {}
-        count = int(body.get("count") or cfg.raw.get("pipeline", {}).get("batch_size", 4))
-        do_fetch = bool(body.get("fetch", False))
+        # auto: exactly what the nightly timer runs — batch sized to keep the
+        # posting queue stocked (may be 0), library topped up first if short
+        auto = bool(body.get("auto"))
+        count = None if auto else int(
+            body.get("count") or cfg.raw.get("pipeline", {}).get("batch_size", 4))
+        # tops up clips / beds only when the library is short of unused ones
+        do_fetch = bool(body.get("fetch", True))
 
         def work():
             from social_peace.pipeline.auto import run_pipeline
             s = run_pipeline(cfg, batch=count, do_fetch=do_fetch, dry_run=False)
-            return {"built": s.get("built", []), "count": len(s.get("built", []))}
+            return {"built": s.get("built", []), "count": len(s.get("built", [])),
+                    "fetched": s.get("fetched", 0), "plan": s.get("plan")}
 
-        return jsonify(job_id=_start_job("generate", work, f"generating {count} new render(s)"))
+        label = "filling the posting queue" if auto else f"generating {count} new render(s)"
+        return jsonify(job_id=_start_job("generate", work, label))
 
     @app.post("/api/fetch/<kind>")
     def api_fetch(kind: str):

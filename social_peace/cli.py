@@ -8,6 +8,9 @@
   social-peace review  [--host H] [--port P]                   # web UI to approve/reject
   social-peace variant STEM --change video|audio|text [--prefer "river ambience"]  # re-render, one thing swapped
   social-peace publish-approved [--platform P] [--limit N]     # post the approved renders
+  social-peace publish-due  [--dry-run]   # scheduler tick: post the queue head if a slot has passed
+  social-peace publish-next [--count N]   # post the queue head now, ignoring the slots
+  social-peace schedule                   # show slots + the posting queue
   social-peace captions-bank [--per-list N] # LLM-generate more caption/overlay lines into the bank
   social-peace prune   [--days N] [--all]  # delete rejected renders to free output/ space
   social-peace ledger  [--limit N]        # tail the posts.jsonl ledger
@@ -198,7 +201,11 @@ def cmd_publish_approved(args: argparse.Namespace) -> int:
     if not reports:
         print("no approved videos awaiting publish")
         return 0
+    return _print_reports(reports, args.dry_run)
 
+
+# ------------------------------------------------------------------------ schedule
+def _print_reports(reports: list[dict], dry_run: bool) -> int:
     rc = 0
     for rep in reports:
         if rep.get("error"):
@@ -206,7 +213,7 @@ def cmd_publish_approved(args: argparse.Namespace) -> int:
             rc = 1
             continue
         for r in rep["results"]:
-            if args.dry_run:
+            if dry_run:
                 print(f"would publish {rep['id']} -> {r['platform']}")
             elif r["ok"]:
                 print(f"{rep['id']} -> {r['platform']}: {r['status']} {r.get('url') or ''}".rstrip())
@@ -214,6 +221,50 @@ def cmd_publish_approved(args: argparse.Namespace) -> int:
                 print(f"{rep['id']} -> {r['platform']}: FAILED {r['error']}")
                 rc = 1
     return rc
+
+
+def cmd_publish_due(args: argparse.Namespace) -> int:
+    from social_peace.publish.schedule import publish_due
+
+    cfg = _bootstrap()
+    res = publish_due(cfg, dry_run=args.dry_run)
+    if not res["due"]:
+        if args.verbose or res.get("slot"):
+            print(f"nothing due: {res['reason']}")
+        return 0
+    print(f"slot {res['slot']}: {res['reason']}")
+    rc = _print_reports(res["retries"] + res["posted"], args.dry_run)
+    return rc if res["posted"] else 1
+
+
+def cmd_publish_next(args: argparse.Namespace) -> int:
+    from social_peace.publish.schedule import publish_next
+
+    cfg = _bootstrap()
+    res = publish_next(cfg, count=args.count, dry_run=args.dry_run)
+    if not res["posted"] and not res["retries"]:
+        print("posting queue is empty")
+        return 0
+    return _print_reports(res["retries"] + res["posted"], args.dry_run)
+
+
+def cmd_schedule(args: argparse.Namespace) -> int:
+    from social_peace.publish.schedule import fmt_slot, status
+
+    cfg = _bootstrap()
+    st = status(cfg)
+    state = "on" if st["enabled"] else "OFF (schedule.enabled: false)"
+    print(f"schedule {state} — {', '.join(st['slots'])} {st['timezone']}"
+          f" · {st['posts_per_day']}/day")
+    print(f"next slot: {fmt_slot(st['next_slot'])}")
+    low = "  ⚠ running low" if st["low"] else ""
+    print(f"queue: {len(st['queue'])} approved ≈ {st['queue_days']:.1f} day(s),"
+          f" empty from {fmt_slot(st['runs_out'])}{low}")
+    for stem in st["queue"]:
+        print(f"  {fmt_slot(st['plan'].get(stem)):>18}  {stem}")
+    for stem, rest in st["partial"]:
+        print(f"  retry next slot    {stem} -> {', '.join(rest)}")
+    return 0
 
 
 # -------------------------------------------------------------------- captions-bank
@@ -320,6 +371,19 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--limit", type=int, default=None, help="cap how many to publish this run")
     pa.add_argument("--dry-run", action="store_true")
     pa.set_defaults(func=cmd_publish_approved)
+
+    pd = sub.add_parser("publish-due", help="scheduler tick: post the queue head if a slot has passed")
+    pd.add_argument("--dry-run", action="store_true")
+    pd.add_argument("-v", "--verbose", action="store_true", help="also report when nothing is due")
+    pd.set_defaults(func=cmd_publish_due)
+
+    pn = sub.add_parser("publish-next", help="post the head of the posting queue now")
+    pn.add_argument("--count", type=int, default=None, help="how many (default schedule.per_slot)")
+    pn.add_argument("--dry-run", action="store_true")
+    pn.set_defaults(func=cmd_publish_next)
+
+    sc = sub.add_parser("schedule", help="show the posting slots and queue")
+    sc.set_defaults(func=cmd_schedule)
 
     cb = sub.add_parser("captions-bank", help="ask Claude for new caption/overlay lines, add to the bank")
     cb.add_argument("--per-list", type=int, default=6)

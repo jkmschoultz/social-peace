@@ -16,7 +16,11 @@ from social_peace.fetch.common import (
     append_manifest_stub,
     download,
     incoming_dir,
+    mark_seen,
+    output_size,
+    pick_rendition,
     query_tags,
+    seen_ids,
     slugify,
 )
 
@@ -31,20 +35,16 @@ def _headers() -> dict:
     return {"Authorization": key}
 
 
-def _best_file(video: dict, min_height: int = 1280) -> dict | None:
-    files = sorted(
-        video.get("video_files", []),
-        key=lambda f: (f.get("height") or 0) * (f.get("width") or 0),
-        reverse=True,
-    )
-    for f in files:
-        if f.get("file_type") == "video/mp4" and (f.get("height") or 0) >= min_height:
-            return f
-    return files[0] if files else None
+def _best_file(video: dict, out_w: int = 1080, out_h: int = 1920) -> dict | None:
+    """Smallest mp4 rendition that covers the output frame (see pick_rendition)."""
+    mp4s = [f for f in video.get("video_files", []) if f.get("file_type") == "video/mp4"]
+    return pick_rendition(mp4s, out_w, out_h)
 
 
-def search(query: str, *, orientation: str = "portrait", size: str = "large", per_page: int = 15) -> list[dict]:
-    params = {"query": query, "orientation": orientation, "size": size, "per_page": per_page}
+def search(query: str, *, orientation: str = "portrait", size: str = "large", per_page: int = 15,
+           page: int = 1) -> list[dict]:
+    params = {"query": query, "orientation": orientation, "size": size, "per_page": per_page,
+              "page": page}
     resp = requests.get(API, params=params, headers=_headers(), timeout=30)
     resp.raise_for_status()
     return resp.json().get("videos", [])
@@ -53,31 +53,43 @@ def search(query: str, *, orientation: str = "portrait", size: str = "large", pe
 def fetch(cfg: Config, query: str | None = None, *, limit: int = 5) -> list[str]:
     fc = cfg.raw.get("fetch", {}).get("pexels", {})
     query = query or fc.get("default_query", "calm nature vertical")
-    videos = search(
-        query,
-        orientation=fc.get("orientation", "portrait"),
-        size=fc.get("size", "large"),
-        per_page=int(fc.get("per_page", 15)),
-    )
     dest_dir = incoming_dir(cfg.path("video_assets"))
     manifest_path = cfg.root / cfg.raw.get("assets_manifest", "assets/manifest.yaml")
+    seen = seen_ids(cfg.path("video_assets"), "pexels")
     saved: list[str] = []
-    for v in videos[:limit]:
-        f = _best_file(v)
-        if not f:
-            continue
-        name = f"pexels-{v['id']}-{slugify(query)}.mp4"
-        dest = dest_dir / name
-        if download(f["link"], dest):
-            append_manifest_stub(
-                manifest_path, "video", name,
-                {
-                    "tags": query_tags(query),
-                    "source": f"Pexels — {v.get('user', {}).get('name', 'unknown')}",
-                    "license": "Pexels License",
-                    "url": v.get("url", ""),
-                },
-            )
-            saved.append(str(dest))
+    # page past results the library already has, so a repeated query still yields new clips
+    for page in range(1, int(fc.get("max_pages", 3)) + 1):
+        videos = search(
+            query,
+            orientation=fc.get("orientation", "portrait"),
+            size=fc.get("size", "large"),
+            per_page=int(fc.get("per_page", 15)),
+            page=page,
+        )
+        for v in videos:
+            if len(saved) >= limit:
+                break
+            if str(v["id"]) in seen:
+                continue
+            f = _best_file(v, *output_size(cfg))
+            if not f:
+                continue
+            name = f"pexels-{v['id']}-{slugify(query)}.mp4"
+            dest = dest_dir / name
+            seen.add(str(v["id"]))
+            if download(f["link"], dest):
+                mark_seen(cfg.path("video_assets"), "pexels", v["id"])
+                append_manifest_stub(
+                    manifest_path, "video", name,
+                    {
+                        "tags": query_tags(query),
+                        "source": f"Pexels — {v.get('user', {}).get('name', 'unknown')}",
+                        "license": "Pexels License",
+                        "url": v.get("url", ""),
+                    },
+                )
+                saved.append(str(dest))
+        if len(saved) >= limit or len(videos) < int(fc.get("per_page", 15)):
+            break
     log.info("pexels: saved %d clip(s) to %s", len(saved), dest_dir)
     return saved

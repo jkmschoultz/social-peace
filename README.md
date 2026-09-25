@@ -84,10 +84,17 @@ python -m social_peace publish-approved
 python -m social_peace publish-approved --dry-run   # show what would go, post nothing
 ```
 
-`pipeline` fetches from the sources in `pipeline.fetch_sources` (rotating through
-`pipeline.queries`), moves `_incoming/` straight into the render pool
-(`auto_promote`), and renders `pipeline.batch_size` videos — each sidecar starts
-at `review.state: pending`. Audio scraping needs `FREESOUND_API_KEY`; without it
+`pipeline` (and the UI's Generate button) first checks the library: if there
+aren't enough clips / beds that no pending, approved or published render already
+uses — enough for the batch (~2.5 clips and ~1.5 beds per render) and at least
+`pipeline.min_unused_clips` / `min_unused_audio` — it fetches the shortfall from
+`pipeline.fetch_sources` + Freesound. Search terms rotate round-robin through
+`pipeline.queries` across runs (position kept in `logs/fetch_state.json`), and
+each fetcher skips stock ids the library already has or once had
+(`assets/*/.fetched.json`, so deleted clips aren't re-fetched), paging deeper
+when a term comes round again. Downloads go straight into the render pool
+(`auto_promote`), then the batch renders — each sidecar starts at
+`review.state: pending`. Audio scraping needs `FREESOUND_API_KEY`; without it
 that step is skipped and the existing `assets/audio/` is used. The review UI
 shows every source clip's Pexels/Pixabay/Freesound link so the licence +
 model-release check happens per video.
@@ -183,25 +190,62 @@ python -m social_peace run
 python -m social_peace ledger
 ```
 
-## Scheduling [WIP]
+## Scheduling
 
-**Linux / macOS** — `scripts/run_daily.sh [pipeline|publish-approved|all]`. Example
-`crontab -e` (render a batch at 09:00, post whatever you approved by 18:00):
+Approving a render puts it in the **posting queue** (the approved tab, shown in
+posting order). At each `schedule.slots` time — `08:00 / 12:30 / 19:00`
+`Europe/Berlin` by default — the head of the queue goes out to every
+`target_platforms`. Reorder with ⤒ / ↑ / ↓ on a card; the header shows the next
+slot, how many days the queue covers, and warns when it drops under
+`schedule.low_queue_days`.
+
+```bash
+python -m social_peace schedule            # slots + what posts when
+python -m social_peace publish-due         # scheduler tick (what the timer runs)
+python -m social_peace publish-next        # post the queue head right now
+```
+
+- The slot times live only in `config.yaml`. The timer runs `publish-due` every
+  5 minutes; it posts only when a slot has passed that hasn't been served
+  (`logs/schedule_state.json`), so extra ticks are harmless.
+- A slot noticed more than `grace_minutes` late (machine was asleep) is skipped,
+  not posted late — no bursts after a wake-up.
+- If a render goes live on some platforms but fails on others, the missing ones
+  are retried at the following slots (alongside that slot's new post) until they
+  succeed or hit `max_attempts`. A render failing everywhere stays at the head of
+  the queue — so an expired token doesn't burn through your approved content —
+  and drops out after `max_attempts`, with the errors shown on its card.
+- "Publish all N now" in the header still posts everything immediately,
+  bypassing the schedule.
+
+**Keeping the queue stocked:** a scheduled `pipeline` run sizes its batch from
+the queue (`pipeline.adaptive_batch`): enough renders that queued + pending, at
+your recent approval rate (from the ledger's review events, floored at 25%),
+covers `target_queue_days` of slots, capped at `max_batch`. If the queue is
+already stocked it renders nothing. `--batch N` and the UI's Generate button
+still render a fixed count.
+
+**Linux (systemd user timers, recommended — `Persistent=` catches up after sleep):**
+
+```bash
+cp scripts/systemd/social-peace-* ~/.config/systemd/user/   # edit the paths if the repo isn't ~/Documents/Code/social-peace
+systemctl --user daemon-reload
+systemctl --user enable --now social-peace-publish.timer social-peace-pipeline.timer
+systemctl --user list-timers | grep social-peace
+loginctl enable-linger "$USER"      # keep timers running while logged out
+```
+
+**cron equivalent** — `scripts/run_daily.sh [pipeline|publish-due|publish-approved|prune|all]`:
 
 ```cron
-0 9  * * *  /path/to/social-peace/scripts/run_daily.sh pipeline         >> /path/to/social-peace/logs/cron.log 2>&1
-0 18 * * *  /path/to/social-peace/scripts/run_daily.sh publish-approved >> /path/to/social-peace/logs/cron.log 2>&1
+*/5 * * * *  /path/to/social-peace/scripts/run_daily.sh publish-due >> /path/to/social-peace/logs/cron.log 2>&1
+0 2 * * *    /path/to/social-peace/scripts/run_daily.sh pipeline    >> /path/to/social-peace/logs/cron.log 2>&1
 ```
 
-**Windows** — `scripts/run_daily.ps1` executes a complete `run` (build + publish, no review gate):
+**Windows** — `scripts/run_daily.ps1` still executes a complete `run` (build +
+publish, no review gate); not yet switched to the queue.
 
-```powershell
-.\scripts\register_task.ps1 -Times "09:00","18:00"
-Start-ScheduledTask -TaskName social-peace-daily   # test it
-```
-
-The machine must be on at those times. `-StartWhenAvailable` makes a missed run fire
-late rather than skip.
+The machine must be on at slot times (within `grace_minutes`).
 
 ## Pipeline notes
 
@@ -235,5 +279,8 @@ late rather than skip.
 - [x] Sort the review grid; `prune` rejected renders (30-day auto + button)
 - [x] TikTok Content Posting API publisher (skeleton — not yet run live)
 - [x] Instagram Graph API (Reels) publisher + auto cloudflared tunnel for the fetch
+- [x] Posting queue + daily slots (`publish-due`), partial-failure retries, reorder in UI
+- [x] Adaptive `pipeline` batch that keeps the queue stocked
+- [x] Need-based auto-fetch on a rotating search term; fetchers skip known stock ids
 - [ ] YouTube: submit for verification (lifts private-only + 7-day token)
 - [ ] Exercise the TikTok publisher against the real API

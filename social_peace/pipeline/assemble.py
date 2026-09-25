@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from social_peace.config import Config
-from social_peace.pipeline.ffmpeg_utils import run_ffmpeg
+from social_peace.pipeline.ffmpeg_utils import resolve_encoder, run_ffmpeg, video_encoder_args
 from social_peace.pipeline.metadata import build_metadata, write_sidecar
 from social_peace.pipeline.overlays import render_overlay
 from social_peace.pipeline.selectors import Selection, build_selection
@@ -177,22 +177,30 @@ def build_one(
         inputs += ["-stream_loop", "-1", "-i", str(bed.path)]
     inputs += ["-loop", "1", "-t", _f(total), "-i", str(overlay_png)]
 
-    args = [
-        *inputs,
-        "-filter_complex", filtergraph,
-        "-map", "[vout]", "-map", "[aout]",
-        "-r", str(fps),
-        "-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p",
-        "-preset", str(cfg.render.get("preset", "medium")),
-        "-crf", str(cfg.render.get("crf", 19)),
-        "-c:a", "aac", "-b:a", "256k", "-ar", "48000",
-        "-movflags", "+faststart",
-        "-t", _f(total),
-        "-metadata", f"comment=social-peace seed={seed} template={sel.template['name']}",
-        str(video_path),
-    ]
+    def _args(encoder: str) -> list[str]:
+        return [
+            *inputs,
+            "-filter_complex", filtergraph,
+            "-map", "[vout]", "-map", "[aout]",
+            "-r", str(fps),
+            *video_encoder_args(cfg.render, encoder),
+            "-c:a", "aac", "-b:a", "256k", "-ar", "48000",
+            "-movflags", "+faststart",
+            "-t", _f(total),
+            "-metadata", f"comment=social-peace seed={seed} template={sel.template['name']}",
+            str(video_path),
+        ]
 
-    run_ffmpeg(args, dry_run=dry_run)
+    encoder = resolve_encoder(cfg.render)
+    try:
+        run_ffmpeg(_args(encoder), dry_run=dry_run)
+    except RuntimeError:
+        if encoder == "libx264":
+            raise
+        # e.g. consumer NVIDIA cards cap concurrent NVENC sessions — the review
+        # UI can have several renders going at once. Fall back to the CPU.
+        log.warning("%s encode failed, retrying with libx264", encoder)
+        run_ffmpeg(_args("libx264"), dry_run=dry_run)
 
     if dry_run:
         overlay_png.unlink(missing_ok=True)

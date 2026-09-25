@@ -1,0 +1,8 @@
+# Fires due posting slots. Installed as a user unit — see README "Scheduling".
+[Unit]
+Description=social-peace: post the queue head if a schedule slot has passed
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Documents/Code/social-peace
+ExecStart=%h/Documents/Code/social-peace/scripts/run_daily.sh publish-due

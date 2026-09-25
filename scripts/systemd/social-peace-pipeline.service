@@ -1,0 +1,8 @@
+[Unit]
+Description=social-peace: render enough new content to keep the posting queue stocked
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Documents/Code/social-peace
+ExecStart=%h/Documents/Code/social-peace/scripts/run_daily.sh pipeline
+ExecStartPost=%h/Documents/Code/social-peace/scripts/run_daily.sh prune

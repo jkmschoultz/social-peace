@@ -179,6 +179,22 @@ def test_generate_endpoint_runs_job(client, monkeypatch):
     assert j["state"] == "done" and j["result"]["count"] == 2
 
 
+def test_generate_auto_runs_the_nightly_pipeline(client, monkeypatch):
+    c, *_ = client
+    from social_peace.pipeline import auto as amod
+    seen = {}
+
+    def fake(cfg, **kw):
+        seen.update(kw)
+        return {"built": [], "fetched": 0, "plan": {"batch": 0, "queued": 9, "pending": 0}, "ok": True}
+
+    monkeypatch.setattr(amod, "run_pipeline", fake)
+    j = _wait_job(c, c.post("/api/generate", json={"auto": True}).get_json()["job_id"])
+    assert seen["batch"] is None and seen["do_fetch"] is True    # adaptive batch + top-up
+    assert j["result"]["count"] == 0 and j["result"]["plan"]["queued"] == 9
+    assert "Fill queue" in c.get("/").get_data(as_text=True)
+
+
 @pytest.mark.parametrize("kind", ["video", "audio"])
 def test_fetch_endpoint_runs_job(client, monkeypatch, kind):
     c, *_ = client
@@ -322,3 +338,24 @@ def test_jobs_list_endpoint(client):
     _wait_job(c, jid)
     listing = c.get("/api/jobs").get_json()["jobs"]
     assert any(x["id"] == jid and x["label"] == "a test job" for x in listing)
+
+
+def test_approved_tab_shows_queue_and_reorders(client, tmp_path):
+    c, side, _ = client
+    out = tmp_path / "output"
+    c.post("/api/decision/20260101-000000_warm-dawn_1", json={"state": "approved"})
+    stem2 = "20260102-000000_cool-tide_2"
+    md = json.loads(side.read_text(encoding="utf-8"))
+    md["id"] = stem2
+    (out / f"{stem2}.json").write_text(json.dumps(md), encoding="utf-8")
+    for s in ("20260101-000000_warm-dawn_1", stem2):
+        (out / f"{s}.mp4").write_bytes(b"x")
+
+    html = c.get("/?filter=approved").get_data(as_text=True)
+    assert "next post" in html and "#1 in queue" in html and "#2 in queue" in html
+    assert html.index("warm-dawn_1") < html.index("cool-tide_2")   # queue order
+
+    r = c.post(f"/api/queue/{stem2}/move", json={"to": "top"})
+    assert r.get_json()["queue"] == [stem2, "20260101-000000_warm-dawn_1"]
+    assert c.get("/api/schedule").get_json()["queue"][0] == stem2
+    assert c.post(f"/api/queue/{stem2}/move", json={"to": "sideways"}).status_code == 400
