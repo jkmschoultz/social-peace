@@ -222,7 +222,9 @@ python -m social_peace publish-next        # post the queue head right now
   5 minutes; it posts only when a slot has passed that hasn't been served
   (`logs/schedule_state.json`), so extra ticks are harmless.
 - A slot noticed more than `grace_minutes` late (machine was asleep) is skipped,
-  not posted late — no bursts after a wake-up.
+  not posted late — no bursts after a wake-up. Within grace it is posted late;
+  if the network isn't up yet (tick fired right at boot) the slot is left
+  unclaimed and the next tick tries again.
 - If a render goes live on some platforms but fails on others, the missing ones
   are retried at the following slots (alongside that slot's new post) until they
   succeed or hit `max_attempts`. A render failing everywhere stays at the head of

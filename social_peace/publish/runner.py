@@ -75,7 +75,11 @@ def publish_one(cfg: Config, video_path: Path, platform: str) -> PublishResult:
 
         metadata = load_sidecar(video_path)
         mod = importlib.import_module(PUBLISHERS[platform])
-        result = mod.publish(video_path, metadata)
+        try:
+            result = mod.publish(video_path, metadata)
+        except Exception as exc:  # noqa: BLE001 — one platform must not abort the rest
+            log.exception("%s publish raised", platform)
+            result = PublishResult(platform, ok=False, status="error", error=str(exc))
         ledger.record(
             cfg.path("logs"), "publish",
             video_id=video_path.stem, platform=platform,

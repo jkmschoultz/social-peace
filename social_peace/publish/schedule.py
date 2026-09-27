@@ -19,6 +19,7 @@ import contextlib
 import json
 import logging
 import math
+import socket
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -132,6 +133,16 @@ def _lock(cfg: Config):
             yield
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def online(host: str = "www.googleapis.com", timeout: float = 5.0) -> bool:
+    """Can we reach the internet? A timer tick right after boot/wake often runs
+    before the network is up; posting then would burn the slot on DNS errors."""
+    try:
+        socket.create_connection((host, 443), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
 
 
 # ------------------------------------------------------------------------- queue
@@ -266,13 +277,20 @@ def publish_due(cfg: Config, *, now: datetime | None = None, dry_run: bool = Fal
             return {"due": False, "slot": None,
                     "reason": f"next slot {nxt[0].isoformat() if nxt else '?'}"}
 
+        late = now - slot
+        in_grace = late <= timedelta(minutes=int(s["grace_minutes"]))
+        if in_grace and not dry_run and not online():
+            # just booted / woke and the network isn't up yet: leave the slot
+            # unclaimed so a later tick (still within grace) posts it
+            log.warning("schedule: slot %s due but offline, retrying next tick", slot)
+            return {"due": False, "slot": None, "reason": "offline, will retry"}
+
         if not dry_run:
             # claim the slot before posting: a crash mid-upload must not make
             # every following tick retry the whole slot
             _write_state(cfg, {**_read_state(cfg), "last_slot": slot.isoformat()})
 
-        late = now - slot
-        if late > timedelta(minutes=int(s["grace_minutes"])):
+        if not in_grace:
             log.warning("schedule: slot %s missed by %s, skipping", slot, late)
             if not dry_run:
                 ledger.record(cfg.path("logs"), "schedule", slot=slot.isoformat(),

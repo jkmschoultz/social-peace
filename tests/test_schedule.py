@@ -28,6 +28,7 @@ def cfg(tmp_path, monkeypatch):
     })
     monkeypatch.setitem(cfg.raw["pipeline"], "target_queue_days", 2)
     monkeypatch.setitem(cfg.raw["pipeline"], "max_batch", 12)
+    monkeypatch.setattr(schedule, "online", lambda: True)
     return cfg
 
 
@@ -102,6 +103,34 @@ def test_publish_due_fires_once_per_slot(cfg, posts):
     assert [r["id"] for r in res["posted"]] == ["20260102-b"]
     res = schedule.publish_due(cfg, now=at(19, 0))
     assert res["due"] and res["posted"] == [] and res["reason"] == "queue empty"
+
+
+def test_offline_tick_leaves_slot_for_a_later_one(cfg, posts, monkeypatch):
+    # machine woke at 13:25, network not up yet: don't burn the 12:30 slot
+    calls, _ = posts
+    _render(cfg, "20260101-a")
+    monkeypatch.setattr(schedule, "online", lambda: False)
+    res = schedule.publish_due(cfg, now=at(13, 25))
+    assert not res["due"] and res["reason"] == "offline, will retry"
+    assert calls == []
+
+    monkeypatch.setattr(schedule, "online", lambda: True)
+    res = schedule.publish_due(cfg, now=at(13, 30))
+    assert res["due"] and res["slot"] == at(12, 30).isoformat()
+    assert [r["id"] for r in res["posted"]] == ["20260101-a"]
+
+
+def test_publisher_exception_is_an_error_result(cfg, monkeypatch):
+    side = _render(cfg, "20260101-a")
+
+    def boom(video_path, metadata):
+        raise ConnectionError("Failed to resolve 'graph.instagram.com'")
+
+    monkeypatch.setattr(runner, "load_sidecar", lambda p: {})
+    monkeypatch.setattr(runner.importlib, "import_module",
+                        lambda name: type("M", (), {"publish": staticmethod(boom)}))
+    res = runner.publish_one(cfg, side.with_suffix(".mp4"), "instagram")
+    assert not res.ok and "graph.instagram.com" in res.error
 
 
 def test_disabled_schedule_posts_nothing(cfg, posts, monkeypatch):
