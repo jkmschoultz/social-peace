@@ -40,7 +40,7 @@ pipeline:
   # render enough that, at your recent approval rate, approved + pending covers
   # target_queue_days of slots. `--batch N` overrides.
   adaptive_batch: true
-  target_queue_days: 3
+  target_queue_days: 7
   max_batch: 12                      # cap per run (render time adds up)
   queries:
     video:
