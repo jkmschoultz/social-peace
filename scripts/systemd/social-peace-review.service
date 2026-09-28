@@ -1,0 +1,14 @@
+# Review web UI, kept running. Binds to 127.0.0.1 only (no auth) — reach it
+# remotely via `tailscale serve`, never by binding to 0.0.0.0.
+[Unit]
+Description=social-peace: review web UI
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/Documents/Code/social-peace
+ExecStart=%h/Documents/Code/social-peace/.venv/bin/python -m social_peace review
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
