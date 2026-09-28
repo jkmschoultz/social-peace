@@ -363,6 +363,9 @@ def create_app(cfg: Config) -> Flask:
         counts = {s: len(_filtered(rows, s)) for s in _TABS}
         counts["all"] = len(rows)
         sched = schedule.status(cfg)
+        owed = {stem for stem, _ in sched["partial"]}
+        counts["clearable"] = sum(
+            r["_has_video"] and r["id"] not in owed for r in _filtered(rows, "published"))
         return render_template(
             "index.html",
             videos=_sorted(_filtered(rows, filt), sort, sched["queue"]),
@@ -708,6 +711,12 @@ def create_app(cfg: Config) -> Flask:
         days = None if drop_all else int(body.get("days", 30))
         removed = prune_rejected(cfg, older_than_days=days, drop_all=drop_all)
         return jsonify(removed=removed, count=len(removed))
+
+    @app.post("/api/clear-published")
+    def api_clear_published():
+        from social_peace.pipeline.prune import clear_published_media
+        cleared = clear_published_media(cfg)
+        return jsonify(cleared=cleared, count=len(cleared))
 
     @app.post("/api/variant/<stem>")
     def api_variant(stem: str):

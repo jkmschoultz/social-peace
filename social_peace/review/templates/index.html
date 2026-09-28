@@ -94,6 +94,9 @@
     {% if filt == 'rejected' and counts.rejected %}
       <button class="no" id="pruneBtn">Empty rejected ({{ counts.rejected }})</button>
     {% endif %}
+    {% if filt == 'published' and counts.clearable %}
+      <button class="no" id="clearPubBtn" title="deletes the video files, keeps the metadata so clips / beds / lines aren't reused">Clear published media ({{ counts.clearable }})</button>
+    {% endif %}
     {% if counts.approved %}
       <button class="go" id="pubAll" title="posts everything now, ignoring the schedule">Publish all {{ counts.approved }} now
         {%- if platforms %} → {{ platforms|join(', ') }}{% endif %}</button>
@@ -140,7 +143,7 @@
     {% if v._has_video %}
     <video controls preload="none" poster="/thumb/{{ v.id }}.jpg" src="/media/{{ v.id }}.mp4"></video>
     {% else %}
-    <div class="meta" style="padding:12px 14px">⚠ mp4 missing</div>
+    <div class="meta" style="padding:12px 14px">{{ 'media cleared — metadata kept' if v._state == 'published' else '⚠ mp4 missing' }}</div>
     {% endif %}
     <div class="body">
       <div class="meta">
@@ -205,7 +208,7 @@
       <div class="q-err">{{ p }} failed ({{ (v.schedule.attempts or {}).get(p, 0) }} attempt(s)): {{ err }}</div>
       {% endfor %}
 
-      {% if v.review.state == 'approved' and platforms %}
+      {% if v.review.state == 'approved' and platforms and v._has_video %}
       <div class="row pub-row">
         {% for p in platforms %}
           {% set st = (v.status or {}).get(p, 'pending') %}
@@ -215,6 +218,9 @@
             {{ '✓ ' if done }}{{ p }}
           </button>
         {% endfor %}
+        {% if platforms|length > 1 %}
+          <button class="go pub-all" title="publish to every platform not yet done, in parallel">all remaining</button>
+        {% endif %}
       </div>
       <div class="pub-links">
         {% for p in platforms %}
@@ -243,10 +249,24 @@ function renderResults(el, rep) {
 
 const DONE = ['uploaded', 'published', 'already-published'];
 
-function lockButtons(card, locked) {
-  card.querySelectorAll('.pub-btn').forEach(b => {
-    b.disabled = locked || b.dataset.done === '1';
-  });
+// each platform button runs its own job, so several can be in flight at once
+function syncPubButtons(card) {
+  const btns = [...card.querySelectorAll('.pub-btn')];
+  btns.forEach(b => { b.disabled = b.dataset.busy === '1' || b.dataset.done === '1'; });
+  const all = card.querySelector('.pub-all');
+  if (all) all.disabled = !btns.some(b => !b.disabled);
+}
+
+// one status line per platform inside .pub-out
+function pubLine(card, platform) {
+  const out = card.querySelector('.pub-out');
+  let el = out.querySelector('[data-platform="' + platform + '"]');
+  if (!el) {
+    el = document.createElement('div');
+    el.dataset.platform = platform;
+    out.append(el);
+  }
+  return el;
 }
 
 function setLink(card, platform, res) {
@@ -262,8 +282,10 @@ function setLink(card, platform, res) {
 async function publishPlatform(card, btn) {
   const stem = card.dataset.stem;
   const platform = btn.dataset.platform;
-  const out = card.querySelector('.pub-out');
-  lockButtons(card, true);
+  if (btn.dataset.busy === '1' || btn.dataset.done === '1') return;
+  const out = pubLine(card, platform);
+  btn.dataset.busy = '1';
+  syncPubButtons(card);
   out.textContent = 'publishing to ' + platform + '… (runs in the background — safe to navigate)';
   try {
     const r = await fetch('/api/publish/' + encodeURIComponent(stem), {
@@ -290,7 +312,8 @@ async function publishPlatform(card, btn) {
   } catch (e) {
     out.textContent = 'request failed: ' + e.message;
   } finally {
-    lockButtons(card, false);
+    btn.dataset.busy = '';
+    syncPubButtons(card);
   }
 }
 
@@ -298,7 +321,7 @@ async function publishPlatform(card, btn) {
 // open TikTok's consent page, then paste the address of the callback page it
 // lands on (docs/callback.html). On success the publish is retried.
 async function showTiktokLogin(card, btn, why) {
-  const out = card.querySelector('.pub-out');
+  const out = pubLine(card, btn.dataset.platform);
   out.textContent = '';
   const box = document.createElement('div');
   box.className = 'tt-login';
@@ -513,6 +536,12 @@ function bindCard(card) {
   if (go) go.addEventListener('click', () => reroll(card));
   card.querySelectorAll('.pub-btn').forEach(b =>
     b.addEventListener('click', () => publishPlatform(card, b)));
+  const pubAllCard = card.querySelector('.pub-all');
+  if (pubAllCard) {
+    pubAllCard.addEventListener('click', () =>
+      card.querySelectorAll('.pub-btn').forEach(b => publishPlatform(card, b)));
+    syncPubButtons(card);
+  }
   const cap = card.querySelector('.cap-btn');
   if (cap) cap.addEventListener('click', (e) => {
     e.preventDefault(); e.stopPropagation();
@@ -601,6 +630,20 @@ if (pruneBtn) pruneBtn.addEventListener('click', async () => {
   }
 });
 
+const clearPubBtn = document.getElementById('clearPubBtn');
+if (clearPubBtn) clearPubBtn.addEventListener('click', async () => {
+  if (!confirm('Delete the video files of published renders? Their metadata stays, so the clips, beds and overlay lines they used are still avoided.')) return;
+  clearPubBtn.disabled = true;
+  try {
+    const j = await (await fetch('/api/clear-published', { method: 'POST' })).json();
+    clearPubBtn.textContent = 'cleared ' + j.count + ' — reloading…';
+    setTimeout(() => location.reload(), 900);
+  } catch (e) {
+    clearPubBtn.disabled = false;
+    alert('failed: ' + e.message);
+  }
+});
+
 const pubAll = document.getElementById('pubAll');
 if (pubAll) pubAll.addEventListener('click', async () => {
   if (!confirm('Publish ALL approved videos right now, bypassing the posting schedule?')) return;
@@ -621,6 +664,15 @@ if (pubAll) pubAll.addEventListener('click', async () => {
     alert('failed: ' + e.message);
   }
 });
+</script>
+<script>
+// start every clip at 26% volume; user changes after first play stick
+document.addEventListener('play', e => {
+  const m = e.target;
+  if (!(m instanceof HTMLMediaElement) || m.dataset.volSet) return;
+  m.dataset.volSet = '1';
+  m.volume = 0.26;
+}, true);
 </script>
 </body>
 </html>

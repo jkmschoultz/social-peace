@@ -1,6 +1,10 @@
 """Delete rejected renders to reclaim disk. Old ones age out automatically;
 `drop_all` clears the lot. Approved / published / pending renders are never
-touched, and the ledger keeps the full history."""
+touched, and the ledger keeps the full history.
+
+`clear_published_media` frees the heavy files of published renders but keeps
+their sidecar, which is what selection reads to avoid reusing clips / beds /
+overlay lines."""
 from __future__ import annotations
 
 import json
@@ -53,3 +57,35 @@ def prune_rejected(
     if removed:
         log.info("pruned %d rejected render(s): %s", len(removed), removed)
     return removed
+
+
+# the heavy files of a render; the .json sidecar stays
+_MEDIA_EXTS = (".mp4", ".overlay.png", ".thumb.jpg")
+
+
+def clear_published_media(cfg: Config) -> list[str]:
+    """Delete the video / thumbnail / overlay of published renders, keeping the
+    sidecar. Renders still owed to a platform (scheduler retries pending) are
+    left alone. Returns the stems cleared."""
+    from social_peace.publish import schedule
+    from social_peace.publish.runner import is_published
+
+    out = cfg.path("output")
+    owed = {side.stem for side, _ in schedule.partial(cfg)}
+    cleared: list[str] = []
+    for side in sorted(out.glob("*.json")):
+        try:
+            md = json.loads(side.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        stem = side.stem
+        if (md.get("review") or {}).get("state") != "approved" or not is_published(md):
+            continue
+        if stem in owed or not (out / f"{stem}.mp4").is_file():
+            continue
+        for ext in _MEDIA_EXTS:
+            (out / f"{stem}{ext}").unlink(missing_ok=True)
+        cleared.append(stem)
+    if cleared:
+        log.info("cleared media of %d published render(s): %s", len(cleared), cleared)
+    return cleared

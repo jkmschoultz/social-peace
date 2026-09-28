@@ -46,7 +46,8 @@ AUTH_URL = "https://www.tiktok.com/v2/auth/authorize/"
 SCOPES = "user.info.basic,video.publish"
 _TOKEN_FILE = Path(os.environ.get("TIKTOK_TOKEN_FILE", "secrets/tiktok_token.json"))
 _POLL_TIMEOUT_S = 600
-_REFRESH_MARGIN_S = 900  # > _POLL_TIMEOUT_S, so the token can't lapse mid-post
+_POST_ID_WAIT_S = 120  # extra wait for a public post's id after PUBLISH_COMPLETE
+_REFRESH_MARGIN_S = 900  # > _POLL_TIMEOUT_S + _POST_ID_WAIT_S, so the token can't lapse mid-post
 _LOGIN_TTL_S = 900  # how long a started login's state stays valid
 _pending_logins: dict[str, float] = {}  # state -> started at
 _pending_lock = threading.Lock()
@@ -284,6 +285,30 @@ def _poll(access_token: str, publish_id: str) -> dict | None:
     return None
 
 
+def post_id_of(status: dict) -> str | None:
+    """The post id in a publish-status response (public posts only)."""
+    post_id = status.get("publicaly_available_post_id") or status.get("publicly_available_post_id")
+    post_id = post_id[0] if isinstance(post_id, list) and post_id else post_id
+    return str(post_id) if post_id else None
+
+
+def _await_post_id(access_token: str, publish_id: str) -> str | None:
+    """A public post's id can land a little after PUBLISH_COMPLETE (moderation);
+    keep asking for a short while so the link points at the video."""
+    deadline = time.time() + _POST_ID_WAIT_S
+    while time.time() < deadline:
+        time.sleep(10)
+        try:
+            data = _api(access_token, "/v2/post/publish/status/fetch/", {"publish_id": publish_id})
+        except Exception as exc:  # noqa: BLE001 — already posted; just settle for the profile link
+            log.warning("tiktok: post id lookup for %s failed: %s", publish_id, exc)
+            return None
+        if post_id := post_id_of(data):
+            return post_id
+    log.info("tiktok: no post id for %s after %ss — linking the profile", publish_id, _POST_ID_WAIT_S)
+    return None
+
+
 def _post(access_token: str, video_path: Path, tt: dict, duration: float | None) -> PublishResult:
     creator = _api(access_token, "/v2/post/publish/creator_info/query/")
     username = creator.get("creator_username")
@@ -324,8 +349,9 @@ def _post(access_token: str, video_path: Path, tt: dict, duration: float | None)
         return PublishResult(platform, ok=True, status="uploaded", url=profile, remote_id=publish_id)
 
     # Only public posts get a post id back; private ones link to the profile.
-    post_id = done.get("publicaly_available_post_id") or done.get("publicly_available_post_id")
-    post_id = post_id[0] if isinstance(post_id, list) and post_id else post_id
+    post_id = post_id_of(done)
+    if not post_id and privacy != "SELF_ONLY":
+        post_id = _await_post_id(access_token, publish_id)
     url = f"{profile}/video/{post_id}" if post_id and profile else profile
     return PublishResult(platform, ok=True, status="uploaded", url=url, remote_id=str(post_id or publish_id))
 

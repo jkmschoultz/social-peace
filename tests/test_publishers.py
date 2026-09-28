@@ -253,3 +253,31 @@ def test_tiktok_revoked_refresh_token_reports_needs_login(tmp_path, monkeypatch)
     vid.write_bytes(b"x")
     res = tiktok.publish(vid, {"platforms": {"tiktok": {"caption": "hi"}}})
     assert res.status == "needs-login" and "revoked" in res.error
+
+
+def test_tiktok_public_post_waits_for_post_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("TIKTOK_ACCESS_TOKEN", "t")
+    monkeypatch.setattr(tiktok.time, "sleep", lambda _s: None)
+    statuses = iter([{"status": "PUBLISH_COMPLETE"},                       # _poll
+                     {"status": "PUBLISH_COMPLETE"},                       # still moderating
+                     {"status": "PUBLISH_COMPLETE", "publicaly_available_post_id": [7690512800321408289]}])
+
+    def fake_post(url, headers=None, data=None, timeout=None):
+        if url.endswith("/creator_info/query/"):
+            return _tt_ok({"creator_username": "media.peace",
+                           "privacy_level_options": ["PUBLIC_TO_EVERYONE", "SELF_ONLY"]})
+        if url.endswith("/video/init/"):
+            return _tt_ok({"publish_id": "p1", "upload_url": "https://up/1"})
+        if url.endswith("/status/fetch/"):
+            return _tt_ok(next(statuses))
+        raise AssertionError(url)
+
+    monkeypatch.setattr(tiktok.requests, "post", fake_post)
+    monkeypatch.setattr(tiktok.requests, "put", lambda *a, **k: _TTResp({}))
+    vid = tmp_path / "v.mp4"
+    vid.write_bytes(b"x" * 16)
+    res = tiktok.publish(vid, {"platforms": {"tiktok": {"caption": "hi", "privacy": "PUBLIC_TO_EVERYONE"}}})
+
+    assert res.ok, res.error
+    assert res.url == "https://www.tiktok.com/@media.peace/video/7690512800321408289"
+    assert res.remote_id == "7690512800321408289"

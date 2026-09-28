@@ -310,5 +310,14 @@ document.addEventListener('play', e => {
   });
 }, true);
 </script>
+<script>
+// start every clip at 26% volume; user changes after first play stick
+document.addEventListener('play', e => {
+  const m = e.target;
+  if (!(m instanceof HTMLMediaElement) || m.dataset.volSet) return;
+  m.dataset.volSet = '1';
+  m.volume = 0.26;
+}, true);
+</script>
 </body>
 </html>

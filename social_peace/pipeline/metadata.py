@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import random
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,6 +12,10 @@ from social_peace.pipeline.captions import generate_platform_captions
 from social_peace.pipeline.selectors import Selection
 
 REVIEW_STATES = ("pending", "approved", "rejected")
+
+# per-platform publishes of one render run as parallel jobs in the review UI;
+# serialize their read-modify-write of the sidecar so one can't drop the other's status
+_SIDECAR_LOCK = threading.Lock()
 
 
 def _hook_from_text(text: str) -> str:
@@ -189,15 +194,16 @@ def mark_status(
     url: str | None = None,
     remote_id: str | None = None,
 ) -> dict:
-    md = json.loads(sidecar_path.read_text(encoding="utf-8"))
-    md.setdefault("status", {})[platform] = state
-    if url or remote_id:
-        md.setdefault("published", {})[platform] = {
-            "url": url,
-            "remote_id": remote_id,
-            "utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        }
-    _write(sidecar_path, md)
+    with _SIDECAR_LOCK:
+        md = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        md.setdefault("status", {})[platform] = state
+        if url or remote_id:
+            md.setdefault("published", {})[platform] = {
+                "url": url,
+                "remote_id": remote_id,
+                "utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            }
+        _write(sidecar_path, md)
     return md
 
 
