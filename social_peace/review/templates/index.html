@@ -30,6 +30,8 @@
   .meta b { color:var(--ink); font-weight:600; }
   .srcs { font-size:12px; color:var(--muted); }
   .srcs a { color:inherit; }
+  .srcs .rm-src { flex:none; padding:0 5px; font-size:11px; line-height:1.4; font-weight:600; border-radius:5px; color:var(--muted); }
+  .srcs .rm-src:hover { border-color:var(--no); color:var(--no); }
   details summary { cursor:pointer; font-size:13px; color:var(--muted); }
   .cap-btn { flex:0 0 auto; padding:2px 8px; font-size:11px; font-weight:600; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--muted); cursor:pointer; }
   .cap-out { font-size:11px; margin-top:4px; }
@@ -149,17 +151,20 @@
       <div class="meta">
         <b>{{ v.template }}</b> · {{ '%.0f'|format(v.duration_seconds or 0) }}s · seed {{ v.seed }}
         · <span class="state {{ v._state }}">{{ v._state }}</span>
-        {% if v.variant_of %}· <span title="variant of {{ v.variant_of }}">↻ {{ v.variant_change }}{% if v.variant_prefer %} “{{ v.variant_prefer }}”{% endif %}</span>{% endif %}
+        {% if v.variant_of %}· <span title="variant of {{ v.variant_of }}">↻ {% if v.variant_removed %}without {{ v.variant_removed }}{% else %}{{ v.variant_change }}{% endif %}{% if v.variant_prefer %} “{{ v.variant_prefer }}”{% endif %}</span>{% endif %}
       </div>
       <div class="meta">“{{ v.overlay_text }}”</div>
       <div class="srcs">
-        clips:
-        {% for name, url in (v.source_urls.video or {}).items() %}
-          {% if url %}<a href="{{ url }}" target="_blank" rel="noreferrer">{{ name }}</a>{% else %}{{ name }} (no link){% endif %}{{ ", " if not loop.last }}
-        {% endfor %}
-        <br>audio:
-        {% for name, url in (v.source_urls.audio or {}).items() %}
-          {% if url %}<a href="{{ url }}" target="_blank" rel="noreferrer">{{ name }}</a>{% else %}{{ name }} (no link){% endif %}{{ ", " if not loop.last }}
+        {% for kind, title in [('video', 'clips'), ('audio', 'audio')] %}
+          {% set srcs = v.source_urls[kind] or {} %}
+          {{ '<br>'|safe if not loop.first }}{{ title }}:
+          {% for name, url in srcs.items() %}
+            {% if url %}<a href="{{ url }}" target="_blank" rel="noreferrer">{{ name }}</a>{% else %}{{ name }} (no link){% endif %}
+            {%- if srcs|length > 1 %} <button type="button" class="rm-src" data-kind="{{ kind }}" data-name="{{ name }}"
+              title="re-render this exactly, without {{ name }}">✕</button>
+            <button type="button" class="rm-src" data-kind="{{ kind }}" data-name="{{ name }}" data-delete="1"
+              title="re-render this exactly, without {{ name }}, and delete {{ name }} from the asset library">🗑</button>{% endif %}{{ ", " if not loop.last }}
+          {% endfor %}
         {% endfor %}
       </div>
       <details>
@@ -454,11 +459,42 @@ async function followReroll(card, jobId, what) {
   if (window.spRefreshJobs) window.spRefreshJobs();
   try {
     const res = await pollJob(jobId);
-    out.innerHTML = 'new render (' + res.change.replace(/\+/g, ' + ') + ' changed): <a href="?filter=pending">'
+    const what = res.what || res.change.replace(/\+/g, ' + ') + ' changed';
+    out.innerHTML = 'new render (' + esc(what) + '): <a href="?filter=pending">'
       + res.id + ' — in Pending</a>';
     spRefreshGrid();
   } catch (e) {
     out.textContent = 're-roll failed: ' + e.message;
+  }
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+async function removeSource(card, btn) {
+  const { kind, name } = btn.dataset;
+  const del = btn.dataset.delete === '1';
+  const out = card.querySelector('.var-out');
+  const ask = 'Render a copy of this video without ' + name + '? Everything else stays the same; this one is kept.'
+    + (del ? '\n\n' + name + ' will also be DELETED from the asset library (renders already made keep it).' : '');
+  if (!confirm(ask)) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/remove/' + encodeURIComponent(card.dataset.stem), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, name, delete: del }),
+    });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    if (j.deleted) card.querySelectorAll('.rm-src[data-name="' + CSS.escape(name) + '"]').forEach(b => b.remove());
+    followReroll(card, j.job_id, (j.deleted ? name + ' deleted from library; ' : '') + 'copy without ' + name);
+  } catch (e) {
+    out.textContent = 'failed: ' + e.message;
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -534,6 +570,8 @@ function bindCard(card) {
     b.addEventListener('change', () => syncRejectLabel(card)));
   const go = card.querySelector('.var-go');
   if (go) go.addEventListener('click', () => reroll(card));
+  card.querySelectorAll('.rm-src').forEach(b =>
+    b.addEventListener('click', () => removeSource(card, b)));
   card.querySelectorAll('.pub-btn').forEach(b =>
     b.addEventListener('click', () => publishPlatform(card, b)));
   const pubAllCard = card.querySelector('.pub-all');

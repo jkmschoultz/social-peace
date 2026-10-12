@@ -1,6 +1,7 @@
 """Build the per-video metadata sidecar (<stem>.json) that review + publish consume."""
 from __future__ import annotations
 
+import copy
 import json
 import random
 import threading
@@ -49,7 +50,31 @@ def _instagram_hashtags(md: dict) -> list[str]:
     return [t for t in md.get("hashtags", []) if t.lower() != "#shorts"]
 
 
-def build_metadata(cfg: Config, sel: Selection, video_path: Path) -> dict:
+def build_metadata(
+    cfg: Config, sel: Selection, video_path: Path, *, platforms: dict | None = None
+) -> dict:
+    """`platforms` carries over an existing render's captions as-is (no new ones
+    written)."""
+    return {
+        "id": video_path.stem,
+        "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "video": video_path.name,
+        "duration_seconds": sel.target_duration,
+        "seed": sel.seed,
+        "template": sel.template["name"],
+        "overlay_text": sel.text,
+        "sources": {
+            "video": [c.path.name for c in sel.clips],
+            "audio": [a.path.name for a in sel.audio],
+        },
+        "source_urls": _source_urls(cfg, sel),
+        "review": {"state": "pending", "decided_utc": None, "note": ""},
+        "platforms": copy.deepcopy(platforms) if platforms else _platform_captions(cfg, sel),
+        "status": {"youtube": "pending", "instagram": "pending", "tiktok": "skipped"},
+    }
+
+
+def _platform_captions(cfg: Config, sel: Selection) -> dict:
     rng = random.Random(sel.seed ^ 0xA5A5A5)
     md = cfg.raw["metadata"]
     yt = md["youtube"]
@@ -77,39 +102,23 @@ def build_metadata(cfg: Config, sel: Selection, video_path: Path) -> dict:
     description = _with_hashtags(description, hashtags)
 
     return {
-        "id": video_path.stem,
-        "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "video": video_path.name,
-        "duration_seconds": sel.target_duration,
-        "seed": sel.seed,
-        "template": sel.template["name"],
-        "overlay_text": sel.text,
-        "sources": {
-            "video": [c.path.name for c in sel.clips],
-            "audio": [a.path.name for a in sel.audio],
+        "youtube": {
+            "title": title[:100],
+            "description": description[:4900],
+            "tags": list(yt.get("tags", [])),
+            "categoryId": str(yt.get("category_id", "22")),
+            "privacyStatus": yt.get("privacy", "public"),
+            "madeForKids": bool(yt.get("made_for_kids", False)),
         },
-        "source_urls": _source_urls(cfg, sel),
-        "review": {"state": "pending", "decided_utc": None, "note": ""},
-        "platforms": {
-            "youtube": {
-                "title": title[:100],
-                "description": description[:4900],
-                "tags": list(yt.get("tags", [])),
-                "categoryId": str(yt.get("category_id", "22")),
-                "privacyStatus": yt.get("privacy", "public"),
-                "madeForKids": bool(yt.get("made_for_kids", False)),
-            },
-            "tiktok": {
-                "caption": _with_hashtags(tiktok_body, tiktok.get("hashtags", []))[:2200],
-                "hashtags": list(tiktok.get("hashtags", [])),
-                "privacy": tiktok.get("privacy", "SELF_ONLY"),
-            },
-            "instagram": {
-                "caption": _with_hashtags(instagram_body, ig_hashtags)[:2200],
-                "hashtags": ig_hashtags,
-            },
+        "tiktok": {
+            "caption": _with_hashtags(tiktok_body, tiktok.get("hashtags", []))[:2200],
+            "hashtags": list(tiktok.get("hashtags", [])),
+            "privacy": tiktok.get("privacy", "SELF_ONLY"),
         },
-        "status": {"youtube": "pending", "instagram": "pending", "tiktok": "skipped"},
+        "instagram": {
+            "caption": _with_hashtags(instagram_body, ig_hashtags)[:2200],
+            "hashtags": ig_hashtags,
+        },
     }
 
 

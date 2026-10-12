@@ -418,3 +418,42 @@ def test_tiktok_login_endpoints(client, monkeypatch):
     assert ok.status_code == 200 and ok.get_json()["scope"] == "video.publish"
     bad = c.post("/api/tiktok/login", json={"redirect": "nope"})
     assert bad.status_code == 400 and "no code" in bad.get_json()["error"]
+
+
+@pytest.mark.parametrize("delete", [False, True])
+def test_remove_endpoint_rerenders_and_optionally_deletes_asset(client, tmp_path, monkeypatch, delete):
+    c, side, _ = client
+    md = json.loads(side.read_text())
+    md["sources"] = {"video": ["a.mp4"], "audio": ["b.mp3", "c.mp3"]}
+    side.write_text(json.dumps(md))
+    for n in ("b.mp3", "c.mp3"):
+        (tmp_path / "audio" / n).write_bytes(b"x")
+    (tmp_path / "video" / "a.mp4").write_bytes(b"x")
+    from social_peace.pipeline import variant as vmod
+    seen = {}
+
+    def fake(cfg, orig, kind, name, **kw):
+        seen["args"] = (kind, name)
+        return {"id": "NEW", "template": orig["template"], "seed": orig["seed"],
+                "sources": {"video": ["a.mp4"], "audio": ["b.mp3"]}, "duration": 10}
+
+    monkeypatch.setattr(vmod, "make_without", fake)
+    r = c.post("/api/remove/20260101-000000_warm-dawn_1",
+               json={"kind": "audio", "name": "c.mp3", "delete": delete})
+    assert r.status_code == 200 and r.get_json()["deleted"] is delete
+    j = _wait_job(c, r.get_json()["job_id"])
+    assert j["state"] == "done" and seen["args"] == ("audio", "c.mp3")
+    assert (tmp_path / "audio" / "c.mp3").is_file() is not delete
+    assert (tmp_path / "audio" / "b.mp3").is_file()
+
+
+def test_remove_endpoint_refuses_last_source(client, tmp_path):
+    c, side, _ = client
+    md = json.loads(side.read_text())
+    md["sources"] = {"video": ["a.mp4"], "audio": ["b.mp3"]}
+    side.write_text(json.dumps(md))
+    (tmp_path / "audio" / "b.mp3").write_bytes(b"x")
+    r = c.post("/api/remove/20260101-000000_warm-dawn_1",
+               json={"kind": "audio", "name": "b.mp3", "delete": True})
+    assert r.status_code == 400
+    assert (tmp_path / "audio" / "b.mp3").is_file()

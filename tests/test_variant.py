@@ -6,7 +6,7 @@ import pytest
 
 from social_peace.config import Config
 from social_peace.pipeline.selectors import AUDIO_EXTS, VIDEO_EXTS, _list_media
-from social_peace.pipeline.variant import make_variant
+from social_peace.pipeline.variant import check_removable, make_variant, make_without
 
 _cfg = Config.load()
 _enough = (
@@ -68,3 +68,46 @@ def test_prefer_biases_audio_reroll():
     assert r["sources"]["audio"] != o["sources"]["audio"]  # still a fresh pick
     assert r["sources"]["video"] == o["sources"]["video"]   # video pinned
     assert r["variant_prefer"] == "gentle rain"
+
+
+def _sidecar_with(kind):
+    for f in sorted(glob.glob("output/*.json")):
+        d = json.load(open(f))
+        if len(d.get("sources", {}).get(kind, [])) >= 2:
+            try:
+                check_removable(_cfg, d, kind, d["sources"][kind][0])
+            except ValueError:
+                continue
+            return d
+    pytest.skip(f"no render with 2+ {kind} sources still in the library")
+
+
+def test_check_removable_refuses_unknown_and_last():
+    o = {"sources": {"video": ["a.mp4"], "audio": ["x.mp3", "y.mp3"]}}
+    with pytest.raises(ValueError, match="not one of"):
+        check_removable(_cfg, o, "audio", "z.mp3")
+    with pytest.raises(ValueError, match="only video"):
+        check_removable(_cfg, o, "video", "a.mp4")
+    with pytest.raises(ValueError, match="kind"):
+        check_removable(_cfg, o, "text", "x.mp3")
+
+
+@pytest.mark.parametrize("kind", ["audio", "video"])
+def test_remove_one_source_keeps_everything_else(kind):
+    from social_peace.pipeline.variant import _original_starts
+
+    o = _sidecar_with(kind)
+    gone = o["sources"][kind][-1]
+    r = make_without(_cfg, o, kind, gone, dry_run=True)
+    other = "video" if kind == "audio" else "audio"
+    assert r["sources"][kind] == [n for n in o["sources"][kind] if n != gone]
+    assert r["sources"][other] == o["sources"][other]
+    assert r["overlay_text"] == o["overlay_text"]
+    assert r["seed"] == o["seed"] and r["template"] == o["template"]
+    assert r["variant_change"] == f"remove-{kind}" and r["variant_removed"] == gone
+    # kept clips start where they did (or as near as the longer segment allows)
+    before = _original_starts(_cfg, o)
+    for clip, start in zip(r["sources"]["video"], r["clip_starts"]):
+        assert start <= round(before[clip], 3) + 1e-6
+        if kind == "audio":
+            assert start == pytest.approx(before[clip], abs=0.01)

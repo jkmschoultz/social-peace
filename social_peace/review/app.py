@@ -450,17 +450,24 @@ def create_app(cfg: Config) -> Flask:
         if kind not in ("video", "audio"):
             return jsonify(error="kind must be 'video' or 'audio'"), 400
         name = _safe_stem(name)
-        folder = cfg.path("video_assets" if kind == "video" else "audio_assets")
-        f = folder / name
-        if not f.is_file():
+        if not _delete_asset(kind, name):
             abort(404)
+        folder = cfg.path("video_assets" if kind == "video" else "audio_assets")
+        exts = VIDEO_EXTS if kind == "video" else AUDIO_EXTS
+        return jsonify(ok=True, pool_size=len(_list_media(folder, exts)))
+
+    def _delete_asset(kind: str, name: str) -> bool:
+        """Drop a clip / bed from the library and its manifest entry. False if
+        the file isn't there."""
+        f = cfg.path("video_assets" if kind == "video" else "audio_assets") / name
+        if not f.is_file():
+            return False
         f.unlink()
         remove_manifest_entry(
             cfg.root / cfg.raw.get("assets_manifest", "assets/manifest.yaml"), kind, name
         )
         _DUR_CACHE.pop(str(f), None)
-        exts = VIDEO_EXTS if kind == "video" else AUDIO_EXTS
-        return jsonify(ok=True, pool_size=len(_list_media(folder, exts)))
+        return True
 
     @app.post("/api/caption/<key>/<action>")
     def caption_line(key: str, action: str):
@@ -744,6 +751,41 @@ def create_app(cfg: Config) -> Flask:
         original = json.loads(sidecar.read_text(encoding="utf-8"))
         note_reasons(cfg, original, reasons)
         return jsonify(job_id=_queue_variant(stem, original, changes, prefer, reasons))
+
+    @app.post("/api/remove/<stem>")
+    def api_remove(stem: str):
+        """Re-render this one unchanged except without one source. Body: `kind`
+        (video / audio), `name`, and optional `delete` to also drop that file
+        from the asset library. The original render is left as it is."""
+        from social_peace.pipeline.variant import check_removable, make_without
+
+        stem = _safe_stem(stem)
+        sidecar = output_dir / f"{stem}.json"
+        if not sidecar.is_file():
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        kind, name = body.get("kind"), str(body.get("name") or "")
+        original = json.loads(sidecar.read_text(encoding="utf-8"))
+        try:
+            check_removable(cfg, original, kind, name)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        # the re-render doesn't need the dropped file, so it can go straight away
+        deleted = bool(body.get("delete")) and _delete_asset(kind, name)
+
+        def work():
+            res = make_without(cfg, original, kind, name)
+            ledger.record(
+                log_dir, "build", video_id=res["id"], template=res["template"],
+                seed=res["seed"], duration=res.get("duration"), sources=res.get("sources"),
+                variant_of=stem, variant_change=f"remove-{kind}", variant_removed=name,
+                asset_deleted=deleted, ok=True,
+            )
+            return {"id": res["id"], "change": f"remove-{kind}", "variant_of": stem,
+                    "what": f"without {name}"}
+
+        label = f"re-rendering {stem} without {name}"
+        return jsonify(job_id=_start_job("variant", work, label), deleted=deleted)
 
     @app.get("/api/jobs/<job_id>")
     def api_job(job_id: str):

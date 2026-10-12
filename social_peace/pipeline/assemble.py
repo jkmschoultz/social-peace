@@ -21,6 +21,12 @@ def _f(x: float) -> str:
     return f"{x:.3f}"
 
 
+def clip_starts(seed: int, durations: list[float], seg: float) -> list[float]:
+    """Seeded in-point for each clip, in order — where its `seg`-long slice starts."""
+    rng = random.Random(seed ^ 0x5F3759DF)
+    return [rng.uniform(0.0, max(0.0, d - seg - 0.1)) for d in durations]
+
+
 def build_filtergraph(cfg: Config, sel: Selection, overlay_idx: int) -> tuple[str, float]:
     """Return (filter_complex, total_duration). Input order assumed by caller:
     clips 0..n-1, audio n..n+m-1, overlay png at `overlay_idx` (== n+m)."""
@@ -129,7 +135,12 @@ def build_one(
     prefer_video: str | None = None,
     prefer_audio: str | None = None,
     extra_meta: dict | None = None,
+    start_at: dict[str, float] | None = None,
+    platforms: dict | None = None,
 ) -> dict:
+    """`start_at` = {clip name: in-point} overrides the seeded in-point for those
+    clips (clamped to fit the segment). `platforms` reuses existing captions
+    instead of writing new ones."""
     sel = build_selection(
         cfg, seed=seed, template_name=template_name, duration=duration,
         used_video=used_video, used_audio=used_audio,
@@ -167,11 +178,16 @@ def build_one(
     overlay_idx = n + m
     inputs: list[str] = []
 
-    start_rng = random.Random(seed ^ 0x5F3759DF)
-    for clip in sel.clips:
-        max_start = max(0.0, clip.duration - sel.segment_duration - 0.1)
-        start = start_rng.uniform(0.0, max_start)
-        inputs += ["-ss", _f(start), "-t", _f(sel.segment_duration), "-i", str(clip.path)]
+    seg = sel.segment_duration
+    starts = clip_starts(seed, [c.duration for c in sel.clips], seg)
+    if start_at:
+        starts = [
+            min(start_at.get(c.path.name, s), max(0.0, c.duration - seg - 0.1))
+            for c, s in zip(sel.clips, starts)
+        ]
+    starts = [round(s, 3) for s in starts]
+    for clip, start in zip(sel.clips, starts):
+        inputs += ["-ss", _f(start), "-t", _f(seg), "-i", str(clip.path)]
 
     filtergraph, total = build_filtergraph(cfg, sel, overlay_idx)
 
@@ -216,12 +232,14 @@ def build_one(
                 "video": [c.path.name for c in sel.clips],
                 "audio": [a.path.name for a in sel.audio],
             },
+            "clip_starts": starts,
             "dry_run": True,
             **(extra_meta or {}),
         }
 
-    metadata = build_metadata(cfg, sel, video_path)
+    metadata = build_metadata(cfg, sel, video_path, platforms=platforms)
     metadata["duration_seconds"] = round(total, 2)
+    metadata["clip_starts"] = starts
     if extra_meta:
         metadata.update(extra_meta)
     sidecar = write_sidecar(metadata, video_path)

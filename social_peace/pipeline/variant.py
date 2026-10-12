@@ -88,6 +88,78 @@ def make_variant(
     )
 
 
+def check_removable(cfg: Config, original: dict, kind: str, name: str) -> list[str]:
+    """The sources left once `name` is dropped from `original`'s `kind` ("video"
+    / "audio"). Raises ValueError if that isn't possible — it would leave none,
+    or a kept file has since left the library (the pin would silently re-pick)."""
+    if kind not in ("video", "audio"):
+        raise ValueError("kind must be 'video' or 'audio'")
+    names = list(original.get("sources", {}).get(kind, []))
+    if name not in names:
+        raise ValueError(f"{name!r} is not one of this render's {kind} sources")
+    if len(names) < 2:
+        raise ValueError(f"{name!r} is this render's only {kind} source")
+    keep = [n for n in names if n != name]
+    other = "audio" if kind == "video" else "video"
+    gone = [
+        n
+        for k, ns in ((kind, keep), (other, original.get("sources", {}).get(other, [])))
+        for n in ns
+        if not (cfg.path(f"{k}_assets") / n).is_file()
+    ]
+    if gone:
+        raise ValueError(f"no longer in the library: {', '.join(gone)}")
+    return keep
+
+
+def _original_starts(cfg: Config, original: dict) -> dict[str, float]:
+    """{clip name: in-point} the original render used — recorded in its sidecar,
+    or (renders from before that) the seeded draw replayed."""
+    from social_peace.pipeline.assemble import clip_starts
+    from social_peace.pipeline.ffmpeg_utils import ffprobe_duration
+
+    clips = list(original.get("sources", {}).get("video", []))
+    starts = original.get("clip_starts")
+    if not starts or len(starts) != len(clips):
+        tpl = next((t for t in cfg.templates if t["name"] == original["template"]), {})
+        xdur = float(tpl.get("transition_duration", 0.0)) if tpl.get("transition") == "fade" else 0.0
+        n = len(clips)
+        seg = (float(original["duration_seconds"]) + (n - 1) * xdur) / n
+        folder = cfg.path("video_assets")
+        starts = clip_starts(int(original["seed"]),
+                             [ffprobe_duration(folder / c) for c in clips], seg)
+    return dict(zip(clips, starts))
+
+
+def make_without(cfg: Config, original: dict, kind: str, name: str, *, dry_run: bool = False) -> dict:
+    """Re-render `original` exactly — same seed, template, length, text, captions
+    and every other source — minus one clip or audio bed. Dropping a clip keeps
+    the length, so the rest play longer from the same in-points."""
+    keep = check_removable(cfg, original, kind, name)
+    src = original.get("sources", {})
+    pin = {
+        "video": list(src.get("video", [])),
+        "audio": list(src.get("audio", [])),
+        "text": original.get("overlay_text"),
+    }
+    pin[kind] = keep
+    return build_one(
+        cfg,
+        seed=int(original["seed"]),
+        template_name=original["template"],
+        duration=original.get("duration_seconds"),
+        dry_run=dry_run,
+        pin=pin,
+        start_at=_original_starts(cfg, original),
+        platforms=original.get("platforms"),
+        extra_meta={
+            "variant_of": original["id"],
+            "variant_change": f"remove-{kind}",
+            "variant_removed": name,
+        },
+    )
+
+
 def note_reasons(cfg: Config, md: dict, reasons: Iterable[str]) -> None:
     """Act on what the reviewer ticked about a render: an "-overused" reason
     sends that line / those clips / beds to the back of their queue;
