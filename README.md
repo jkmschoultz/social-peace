@@ -1,6 +1,6 @@
 # social-peace
 
-Social media feeds are filling up with low-effort AI content. This project pushes the other way: it assembles calm, original short-form videos (licensed nature footage and ambient sound), lets you approve each one in a local review UI, and publishes the approved ones to YouTube Shorts and Instagram Reels on a schedule. See the results on Instagram at [@social_media_peace](https://www.instagram.com/social_media_peace/).
+Social media feeds are filling up with low-effort AI content. This project pushes the other way: it assembles calm, original short-form videos (licensed nature footage and ambient sound), lets you approve each one in a local review UI, and publishes the approved ones to YouTube Shorts and Instagram Reels on a schedule. See the results on [YouTube](https://www.youtube.com/@media-peace/shorts) and [Instagram](https://www.instagram.com/social_media_peace/).
 
 **Content policy:** original or properly licensed assets only (Pixabay / Pexels /
 Coverr / your own). No scraping other creators, no fake engagement, no re-uploading
