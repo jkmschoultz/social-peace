@@ -1,6 +1,6 @@
 # social-peace
 
-In a world where social media feeds are increasingly filled with AI generated "slop", this program aims to generate more positive "slop"; to encourage more calming, nature filled content to appear in media feeds. Fighting fire with fire, this program assembles calming, original short-form videos (nature footage + ambient sounds) and posts it to YouTube Shorts and Instagram Reels upon user approval.
+Social media feeds are filling up with low-effort AI content. This project pushes the other way: it assembles calm, original short-form videos (licensed nature footage and ambient sound), lets you approve each one in a local review UI, and publishes the approved ones to YouTube Shorts and Instagram Reels on a schedule. See the results on Instagram at [@social_media_peace](https://www.instagram.com/social_media_peace/).
 
 **Content policy:** original or properly licensed assets only (Pixabay / Pexels /
 Coverr / your own). No scraping other creators, no fake engagement, no re-uploading
@@ -23,7 +23,8 @@ social_peace/
                       auto.py = the `pipeline` command (scrape -> promote -> render a batch)
   fetch/              pixabay.py / pexels.py (video) + freesound.py (CC0 audio)
   review/            local Flask web UI to approve / reject renders before they post
-  publish/           base.py + youtube.py (skeleton); tiktok/instagram are skipped stubs
+  publish/           youtube.py + instagram.py (live), tiktok.py (built, not yet run live),
+                      runner.py + schedule.py (posting queue and daily slots)
 scripts/
   run_daily.sh         scheduler entrypoint (Linux/macOS)
   run_daily.ps1        scheduler entrypoint (Windows)
@@ -279,7 +280,7 @@ The machine must be on at slot times (within `grace_minutes`).
 ## Roadmap
 
 - [x] Project scaffold + ffmpeg assembly pipeline
-- [x] YouTube publisher skeleton (OAuth + resumable upload)
+- [x] YouTube publisher (OAuth + resumable upload)
 - [x] Per-platform caption/hashtag variants in the sidecar
 - [x] `pipeline` command: scrape + auto-promote + render a review batch
 - [x] Freesound CC0 audio fetcher
